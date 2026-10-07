@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session board</title>
+<style>
+:root {
+  --board: #f1f1f3;
+  --bay: #e8e8ea;
+  --strip: #ffffff;
+  --ink: #26272b;
+  --ink-soft: #5e5e6c;
+  --rule: #d1d1d5;
+  --needs: #feb000;
+  --needs-text: #9a5b00;
+  --needs-wash: rgb(254 176 0 / .16);
+  --working: #6fcdb6;
+  --detached: #babac0;
+  --parked: #9575cd;
+  --stale: #87aec1;
+  --done: #bee034;
+  --primary: #6fcdb6;
+  --on-primary: #26272b;
+  --button: #ffffff;
+  --shadow-strip: 0 .2rem .45rem 0 rgb(0 0 0 / .08), 0 .0375rem .1125rem 0 rgb(0 0 0 / .1);
+  --shadow-button: 0 .09375rem .225rem 0 rgb(0 0 0 / .18), 0 .01875rem .05625rem 0 rgb(0 0 0 / .16);
+  --shadow-button-hover: 0 .125rem .375rem rgb(0 0 0 / .22), 0 .4rem .475rem -.3rem rgb(0 0 0 / .1);
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --board: #14142a; --bay: #19192c; --strip: #272739; --ink: #e8e8ea; --ink-soft: #a5a5b0;
+    --rule: #474756; --needs-text: #feb000; --needs-wash: rgb(254 176 0 / .12); --detached: #757580;
+    --parked: #b39ddb; --button: #303042;
+    --shadow-strip: 0 .2rem .45rem 0 rgb(0 0 0 / .35);
+    --shadow-button: 0 .09375rem .225rem 0 rgb(0 0 0 / .45), inset 0 1px 0 rgb(255 255 255 / .06);
+    --shadow-button-hover: 0 .125rem .375rem rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .08);
+  }
+}
+:root[data-theme="dark"] {
+  --board: #14142a; --bay: #19192c; --strip: #272739; --ink: #e8e8ea; --ink-soft: #a5a5b0;
+  --rule: #474756; --needs-text: #feb000; --needs-wash: rgb(254 176 0 / .12); --detached: #757580;
+  --parked: #b39ddb; --button: #303042;
+  --shadow-strip: 0 .2rem .45rem 0 rgb(0 0 0 / .35);
+  --shadow-button: 0 .09375rem .225rem 0 rgb(0 0 0 / .45), inset 0 1px 0 rgb(255 255 255 / .06);
+  --shadow-button-hover: 0 .125rem .375rem rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .08);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--board); color: var(--ink);
+  font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+}
+header {
+  display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap;
+  padding: 20px 24px 14px;
+}
+header h1 { font: 700 22px/1.1 var(--sans); margin: 0; letter-spacing: -.01em; }
+.tally { font: 500 15px/1 var(--sans); color: var(--ink-soft); }
+.tally b { color: var(--needs-text); font: 700 24px/1 var(--sans); font-variant-numeric: tabular-nums; }
+header input {
+  margin-left: auto; font: inherit; padding: 7px 12px; width: min(320px, 100%);
+  border: 0; border-radius: .5rem; background: var(--strip); color: var(--ink);
+  box-shadow: var(--shadow-button);
+}
+main {
+  display: grid; gap: 16px; padding: 0 24px 32px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+}
+.col { display: grid; gap: 16px; align-content: start; }
+.bay { background: var(--bay); border-radius: 1rem; padding: 12px 12px 14px; }
+.bay h2 {
+  font: 600 15px/1.2 var(--sans); margin: 2px 4px 10px;
+  display: flex; gap: 8px; align-items: baseline;
+}
+.bay h2 .n { color: var(--ink-soft); font-weight: 500; }
+.bay.needs { background: var(--needs-wash); }
+.bay.needs h2 { font-size: 18px; }
+.empty { color: var(--ink-soft); margin: 4px; font-size: 14px; }
+details.bay > summary { list-style: none; cursor: pointer; border-radius: .5rem; }
+details.bay > summary h2 { margin-bottom: 2px; }
+details.bay > summary h2::before { content: "+"; width: 12px; color: var(--ink-soft); }
+details.bay[open] > summary h2::before { content: "\2212"; }
+details.bay[open] > summary h2 { margin-bottom: 10px; }
+
+.strip {
+  display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; column-gap: 12px;
+  background: var(--strip); border-radius: .5rem; margin-top: 8px;
+  padding: 10px 12px 10px 0; box-shadow: var(--shadow-strip); overflow: hidden;
+}
+.strip::before { content: ""; background: var(--edge, var(--detached)); grid-row: 1 / span 3; margin: -10px 0; }
+.strip[data-live="waiting"], .strip[data-live="idle"] { --edge: var(--needs); }
+.strip[data-live="working"] { --edge: var(--working); }
+.strip[data-state="parked"] { --edge: var(--parked); }
+.strip[data-state="stale"] { --edge: var(--stale); }
+.strip[data-state="done"] { --edge: var(--done); }
+.head { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.head > div { min-width: 0; }
+.face { width: 36px; height: 36px; border-radius: 50%; flex: none; margin-top: 1px; box-shadow: 0 0 0 2px var(--strip), 0 0 0 3px var(--rule); }
+.meta a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
+.meta a:hover { color: var(--ink); border-bottom-color: currentColor; }
+.t { font: 600 15px/1.35 var(--sans); overflow-wrap: anywhere; }
+.strip[data-state="done"] .t { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--ink-soft); }
+.meta { color: var(--ink-soft); font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
+.meta .ask { color: var(--needs-text); font-weight: 600; }
+.age { font: 12px/1.6 var(--mono); color: var(--ink-soft); text-align: right; }
+.note {
+  grid-column: 2 / 4; font-size: 14px; border: 0; background: transparent; color: var(--ink);
+  padding: 2px 0; font-family: inherit; border-bottom: 1px dashed transparent;
+}
+.note:hover, .note:focus { border-bottom-color: var(--rule); outline: none; }
+.strip:not(.noting) .note:placeholder-shown:not(:focus) { display: none; }
+.actions { grid-column: 2 / 4; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.actions button {
+  font: 500 13px/1 var(--sans); padding: 7px 10px; border-radius: .4rem; cursor: pointer;
+  border: 0; background: var(--button); color: var(--ink); box-shadow: var(--shadow-button);
+  transition: box-shadow .15s;
+}
+.actions button:hover { box-shadow: var(--shadow-button-hover); }
+.actions button.primary { background: var(--primary); color: var(--on-primary); font-weight: 600; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: none; box-shadow: 0 0 0 .125rem var(--primary); }
+#toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--strip); padding: 8px 14px; border-radius: .5rem;
+  font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+#toast.show { opacity: 1; }
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; padding: 0 16px 24px; }
+  header { padding: 16px 16px 8px; }
+  header input { margin-left: 0; width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { #toast, .actions button { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Session board</h1>
+  <span class="tally" id="tally"></span>
+  <input id="filter" type="search" placeholder="Filter by title, repo or note" aria-label="Filter sessions">
+</header>
+<main>
+  <div class="col">
+    <section class="bay needs"><h2>Needs you <span class="n" id="n-needs"></span></h2><div id="needs"></div></section>
+    <section class="bay"><h2>Open, no tab <span class="n" id="n-open"></span></h2><div id="open"></div></section>
+  </div>
+  <div class="col">
+    <section class="bay"><h2>Working <span class="n" id="n-working"></span></h2><div id="working"></div></section>
+    <section class="bay"><h2>Parked <span class="n" id="n-parked"></span></h2><div id="parked"></div></section>
+    <details class="bay"><summary><h2>Stale, to triage <span class="n" id="n-stale"></span></h2></summary><div id="stale"></div></details>
+    <details class="bay"><summary><h2>Done this week <span class="n" id="n-done"></span></h2></summary><div id="done"></div></details>
+  </div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<template id="strip-tpl">
+  <article class="strip">
+    <div class="head"><img class="face" alt="" hidden><div><div class="t"></div><div class="meta"></div></div></div>
+    <div class="age"></div>
+    <input class="note" placeholder="Add a note">
+    <div class="actions"></div>
+  </article>
+</template>
+<script>
+const EMPTY = {
+  needs: "Nothing is waiting on you.",
+  working: "No session is working right now.",
+  open: "Every open loop has a tab.",
+  parked: "Park a session to keep it out of the way until next cycle.",
+  stale: "No old sessions to triage.",
+  done: "Mark a session done and it lands here.",
+};
+let items = [];
+let byId = {};
+
+function bucket(it) {
+  if (it.state === "done") return "done";
+  if (it.state === "stale" && it.live === "detached") return "stale";
+  if (it.state === "parked") return "parked";
+  if (it.live === "waiting" || it.live === "idle") return "needs";
+  if (it.live === "working") return "working";
+  return "open";
+}
+
+function age(epoch) {
+  if (!epoch) return "";
+  const s = Date.now() / 1000 - epoch;
+  if (s < 60) return "now";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h";
+  return Math.floor(s / 86400) + "d";
+}
+
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-HUD": "1", "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+  return r.json();
+}
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function button(label, onClick, primary) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  if (primary) b.className = "primary";
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function setState(it, state, msg) {
+  await api(`/api/items/${it.session_id}`, { state });
+  toast(msg);
+  load();
+}
+
+function render(it, where) {
+  const el = document.getElementById("strip-tpl").content.firstElementChild.cloneNode(true);
+  el.dataset.live = it.live;
+  el.dataset.state = it.state;
+  el.querySelector(".t").textContent = it.title;
+  el.querySelector(".t").title = it.first_prompt || "";
+  const meta = el.querySelector(".meta");
+  const parts = [it.repo + (it.git_branch && it.git_branch !== "HEAD" && it.git_branch !== "main" ? " / " + it.git_branch : "")];
+  if (it.linked_to && byId[it.linked_to]) parts.push("for: " + byId[it.linked_to].title);
+  for (const p of parts) { const s = document.createElement("span"); s.textContent = p; meta.append(s); }
+  if (it.gh_ref && /^https:\/\/github\.com\//.test(it.gh_url || "")) {
+    const a = document.createElement("a");
+    a.href = it.gh_url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = it.gh_ref.split("/")[1];
+    a.title = it.gh_login ? `${it.gh_ref}, opened by @${it.gh_login}` : it.gh_ref;
+    meta.append(a);
+  }
+  if (it.avatar) {
+    const face = el.querySelector(".face");
+    face.src = it.avatar; face.alt = "@" + it.gh_login; face.title = "@" + it.gh_login; face.hidden = false;
+  }
+  if (it.live === "waiting") {
+    const s = document.createElement("span"); s.className = "ask";
+    s.textContent = it.live_detail || "Waiting for input"; meta.prepend(s);
+  } else if (it.live === "idle" && where === "needs") {
+    const s = document.createElement("span"); s.className = "ask"; s.textContent = "Your turn"; meta.prepend(s);
+  }
+  el.querySelector(".age").textContent = age(it.state === "done" ? it.done_at : it.last_activity_at);
+
+  const note = el.querySelector(".note");
+  note.value = it.note || "";
+  note.addEventListener("blur", () => { if (!note.value) el.classList.remove("noting"); });
+  note.addEventListener("change", async () => {
+    await api(`/api/items/${it.session_id}`, { note: note.value || null });
+    toast("Note saved");
+  });
+
+  const actions = el.querySelector(".actions");
+  const live = ["working", "waiting", "idle"].includes(it.live) && it.kind !== "background";
+  if (!live && it.resume_cmd) {
+    actions.append(button("Resume in iTerm", async () => {
+      const r = await api(`/api/resume/${it.session_id}`, {});
+      toast(r.result === "opened" ? "Opened in a new iTerm tab" : r.result);
+    }, true));
+  }
+  if (live) {
+    actions.append(button("Go to tab", async () => {
+      const r = await api(`/api/focus/${it.session_id}`, {});
+      if (r.result !== "focused") toast(r.result);
+    }, true));
+  }
+  if (!it.note) actions.append(button("Add note", () => { el.classList.add("noting"); note.focus(); }));
+  if (it.resume_cmd) {
+    actions.append(button("Copy command", async () => {
+      await navigator.clipboard.writeText(it.resume_cmd);
+      toast("Resume command copied");
+    }));
+  }
+  if (it.state === "done") actions.append(button("Reopen", () => setState(it, "open", "Reopened")));
+  else {
+    if (it.state !== "parked") actions.append(button("Park", () => setState(it, "parked", "Parked")));
+    else actions.append(button("Unpark", () => setState(it, "open", "Back on the board")));
+    if (it.state === "stale") actions.append(button("Keep open", () => setState(it, "open", "Back on the board")));
+    actions.append(button("Mark done", () => setState(it, "done", "Marked done")));
+  }
+  return el;
+}
+
+function draw() {
+  const q = document.getElementById("filter").value.toLowerCase();
+  const groups = { needs: [], working: [], open: [], parked: [], stale: [], done: [] };
+  for (const it of items) {
+    const hay = [it.title, it.repo, it.note, it.git_branch, it.first_prompt].join(" ").toLowerCase();
+    if (!q || hay.includes(q)) groups[bucket(it)].push(it);
+  }
+  groups.needs.sort((a, b) => (b.live === "waiting") - (a.live === "waiting") || a.last_activity_at - b.last_activity_at);
+  for (const [k, list] of Object.entries(groups)) {
+    const box = document.getElementById(k);
+    box.replaceChildren(...(list.length ? list.map(it => render(it, k)) : [Object.assign(document.createElement("p"), { className: "empty", textContent: EMPTY[k] })]));
+    document.getElementById("n-" + k).textContent = list.length || "";
+  }
+  const all = items.map(bucket);
+  const needs = all.filter(b => b === "needs").length;
+  const open = all.filter(b => ["needs", "working", "open"].includes(b)).length;
+  document.getElementById("tally").innerHTML = `<b>${needs}</b> need you, ${open} open loops`;
+  document.title = needs ? `(${needs}) Session board` : "Session board";
+}
+
+async function load() {
+  if (document.activeElement && document.activeElement.classList.contains("note")) return;
+  try {
+    items = await api("/api/items");
+    byId = Object.fromEntries(items.map(i => [i.session_id, i]));
+    draw();
+  } catch (e) {
+    toast("Can't reach the hud server: " + e.message);
+  }
+}
+
+document.getElementById("filter").addEventListener("input", draw);
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
