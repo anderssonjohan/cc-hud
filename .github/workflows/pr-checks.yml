@@ -1,0 +1,67 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+
+concurrency:
+  group: pr-checks-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Commitlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # The action lists the PR's commits through the API, which needs this.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.actor != 'dependabot[bot]'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1
+        if: github.actor != 'dependabot[bot]'
+        with:
+          # .cjs, because the action's runtime treats bare .js as ESM and the
+          # config uses module.exports.
+          configFile: commitlint.config.cjs
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Ruff lint
+        run: uvx --no-build ruff@0.16.10 check --output-format=github .
+
+      - name: Ruff format
+        if: success() || failure()
+        run: uvx --no-build ruff@0.16.10 format --check .
+
+      - name: ShellCheck
+        if: success() || failure()
+        run: shellcheck hooks/hud-event.sh install.sh swiftbar/hud.30s.sh
+
+      - name: Hook filter compiles
+        if: success() || failure()
+        run: echo '{}' | jq -f hooks/hud-event.jq > /dev/null
