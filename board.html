@@ -130,6 +130,10 @@ details.bay[open] > summary h2 { margin-bottom: 10px; }
 .actions button:hover { box-shadow: var(--shadow-button-hover); }
 .actions button.primary { background: var(--primary); color: var(--on-primary); font-weight: 600; }
 button:focus-visible, input:focus-visible, summary:focus-visible { outline: none; box-shadow: 0 0 0 .125rem var(--primary); }
+.signin { margin: 0 24px 16px; padding: 14px 16px; border-radius: .75rem; background: var(--needs-wash); }
+.signin p { margin: 6px 0 0; color: var(--ink-soft); }
+.signin code { font: 13px var(--mono); color: var(--ink); overflow-wrap: anywhere; }
+main[hidden] { display: none; }
 #toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--strip); padding: 8px 14px; border-radius: .5rem;
@@ -153,6 +157,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: none
   <span class="tally" id="tally"></span>
   <input id="filter" type="search" placeholder="Filter by title, repo or note" aria-label="Filter sessions">
 </header>
+<div id="signin" class="signin" role="alert" hidden>
+  <strong>This browser isn't signed in to the board.</strong>
+  <p>Open board in the menu bar signs in your default browser. For another browser, open the address that <code>hud.py board -p</code> prints in it, for example <code>open -a Safari "$(hud.py board -p)"</code>.</p>
+</div>
 <main>
   <div class="col">
     <section class="bay needs"><h2>Needs you <span class="n" id="n-needs"></span></h2><div id="needs"></div></section>
@@ -229,7 +237,11 @@ async function api(path, body) {
     headers: { "X-HUD": "1", "X-HUD-Token": TOKEN, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+  if (!r.ok) {
+    const err = new Error((await r.json()).error || r.statusText);
+    err.status = r.status;
+    throw err;
+  }
   return r.json();
 }
 
@@ -383,14 +395,22 @@ function draw() {
   document.title = needs ? `(${needs}) Session board` : "Session board";
 }
 
+// Without the token the bays would just sit empty, which reads as "nothing to do".
+function showSignIn(show) {
+  document.getElementById("signin").hidden = !show;
+  document.querySelector("main").hidden = show;
+}
+
 async function load() {
   if (document.activeElement && document.activeElement.classList.contains("note")) return;
   try {
     items = await api("/api/items");
     byId = Object.fromEntries(items.map(i => [i.session_id, i]));
+    showSignIn(false);
     draw();
   } catch (e) {
-    toast(e instanceof TypeError ? "Can't reach the hud server" : e.message);
+    if (e.status === 401) showSignIn(true);
+    else toast(e instanceof TypeError ? "Can't reach the hud server" : e.message);
   }
 }
 
