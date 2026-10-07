@@ -19,8 +19,11 @@ With cc-hud, closing a tab and finishing the work are two different things. I cl
 - **Go to tab** brings the iTerm tab of a live session to the front. **Resume in iTerm** opens a closed session in a new tab, in the right folder.
 - **A menu bar item** (SwiftBar) with the number of sessions that need you. Click a session to jump to it.
 - **A Slack digest** twice a day. It lists sessions waiting on you for over an hour, and open sessions untouched for a day. A board you have to remember to open fails the same way idle tabs do, so this one comes to you.
+- **PR status on each session.** A session's strip shows the last thing that happened on its pull request: `commitlint failed, 5m ago`, `2 checks running`, `Copilot reviewed, 1m ago`. Claude Code records which PRs a session opened or pushed to, so this works without any setup in your sessions. When a closed tab's PR goes red, gets changes requested or is merged, the session moves to Needs you. A merged PR asks whether you want to mark the session done.
 - **Faces of the people you're helping.** When a session is about a GitHub PR or issue, its strip shows the avatar of whoever opened it and links to it. Your own PRs show an assignee instead, or no face.
 - **`/done`** inside any session marks it done. `/done park back next cycle` parks it with a note. Typing in a done or parked session reopens it.
+
+<img alt="The menu bar item open: five sessions under Needs you, two under Working and two under Open, no tab" src="docs/menubar.png" width="460">
 
 Claude Code's own `claude agents` shows what is live right now. cc-hud remembers the rest: closing a tab or rebooting only moves a session to "Open, no tab".
 
@@ -38,7 +41,7 @@ claude agents --json (every 60s) ----+
 
 The board loads nothing from the internet. Two things do leave your machine:
 
-- The snapshot job asks the GitHub API, through your own `gh` login, who opened each PR or issue your sessions link to, and downloads their avatar once into `~/.claude/hud/avatars/`.
+- The snapshot job asks the GitHub API, through your own `gh` login, who opened each PR or issue your sessions link to, and downloads their avatar once into `~/.claude/hud/avatars/`. It also polls the state of those PRs: one GraphQL request a minute at most, covering only open sessions, and less often for sessions you haven't touched in two days.
 - The optional digest goes to your own Slack webhook. It contains session titles, repo folder names and ages, never prompt text.
 
 ## Requirements
@@ -46,7 +49,7 @@ The board loads nothing from the internet. Two things do leave your machine:
 - macOS and iTerm2. Resume and Go to tab use iTerm's AppleScript API.
 - A Claude Code version that has `claude agents --json`.
 - `uv`, `jq` and `sqlite3`.
-- Optional: [SwiftBar](https://github.com/swiftbar/SwiftBar) for the menu bar item, an authenticated [`gh`](https://cli.github.com) for avatars, and a Slack incoming webhook for the digest.
+- Optional: [SwiftBar](https://github.com/swiftbar/SwiftBar) for the menu bar item, an authenticated [`gh`](https://cli.github.com) for avatars and PR status, and a Slack incoming webhook for the digest.
 
 ## Install
 
