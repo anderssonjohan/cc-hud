@@ -51,12 +51,19 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
+      - name: Install dev tools
+        run: uv sync --locked --no-build
+
       - name: Ruff lint
-        run: uvx --no-build ruff@0.16.10 check --output-format=github .
+        run: uv run --no-sync ruff check --output-format=github .
 
       - name: Ruff format
         if: success() || failure()
-        run: uvx --no-build ruff@0.16.10 format --check .
+        run: uv run --no-sync ruff format --check .
+
+      - name: Type-check
+        if: success() || failure()
+        run: uv run --no-sync ty check
 
       - name: ShellCheck
         if: success() || failure()
