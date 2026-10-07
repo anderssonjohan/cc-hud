@@ -1,13 +1,14 @@
 """Find the GitHub PR or issue a session is about and cache the avatar of the person behind it."""
 
 import json
+import os
 import re
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 
-AVATARS = Path.home() / ".claude/hud/avatars"
+AVATARS = Path(os.environ.get("HUD_DB", Path.home() / ".claude/hud/hud.db")).parent / "avatars"
 REF_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/(pull|issues)/(\d+)")
 LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 RECHECK_AFTER = 7 * 86400
@@ -113,3 +114,131 @@ def avatar_path(login: str) -> Path | None:
         return None
     path = AVATARS / login
     return path if path.is_file() else None
+
+
+REPO_PART = re.compile(r"^[\w.-]+$")
+FAST, SLOW, FINAL = 60, 900, 86400
+PRS_PER_QUERY = 20
+
+STATUS_FIELDS = """
+  __typename
+  ... on Issue { state closedAt }
+  ... on PullRequest {
+    state mergedAt closedAt reviewDecision
+    commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { nodes {
+      __typename
+      ... on CheckRun { name status conclusion startedAt completedAt }
+      ... on StatusContext { context state createdAt }
+    } } } } } }
+    latestReviews(first: 10) { nodes { author { login } state submittedAt } }
+  }
+"""
+VERB = {"SUCCESS": "passed", "FAILURE": "failed", "TIMED_OUT": "timed out", "CANCELLED": "cancelled",
+        "ACTION_REQUIRED": "needs action", "STARTUP_FAILURE": "failed", "ERROR": "failed"}
+REVIEW = {"APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "reviewed"}
+
+
+def epoch(ts: str | None) -> int | None:
+    from datetime import datetime
+
+    return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()) if ts else None
+
+
+def reviewer(login: str | None) -> str:
+    return "Copilot" if login and login.lower().startswith("copilot") else (login or "someone")
+
+
+def summarize(node: dict) -> dict:
+    """Reduce a PR or issue to its state, check rollup, latest event and whether it needs attention."""
+    if node.get("__typename") == "Issue":
+        closed = node.get("state") == "CLOSED"
+        return {"pr_state": node.get("state"), "pr_rollup": None, "pr_alert": "closed" if closed else None,
+                "pr_event": "issue closed" if closed else None, "pr_event_at": epoch(node.get("closedAt"))}
+    events, running, failed = [], [], []
+    commit = ((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}
+    rollup = commit.get("statusCheckRollup") or {}
+    for c in (rollup.get("contexts") or {}).get("nodes") or []:
+        if c.get("__typename") == "CheckRun":
+            if c.get("status") != "COMPLETED":
+                running.append(epoch(c.get("startedAt")) or 0)
+            elif c.get("conclusion") in VERB:
+                events.append((epoch(c.get("completedAt")) or 0, f"{c['name']} {VERB[c['conclusion']]}"))
+                if c["conclusion"] != "SUCCESS":
+                    failed.append(events[-1])
+        elif c.get("state") == "PENDING":
+            running.append(epoch(c.get("createdAt")) or 0)
+        elif c.get("state") in VERB:
+            events.append((epoch(c.get("createdAt")) or 0, f"{c['context']} {VERB[c['state']]}"))
+            if c["state"] != "SUCCESS":
+                failed.append(events[-1])
+    for r in (node.get("latestReviews") or {}).get("nodes") or []:
+        if r.get("state") in REVIEW:
+            events.append((epoch(r.get("submittedAt")) or 0,
+                           f"{reviewer((r.get('author') or {}).get('login'))} {REVIEW[r['state']]}"))
+    # The line shows what matters most, not just what happened last: merged, then running, then red, then latest.
+    at, text = max(events) if events else (None, None)
+    if node.get("mergedAt"):
+        at, text = epoch(node["mergedAt"]), "PR merged"
+    elif node.get("state") == "CLOSED":
+        at, text = epoch(node.get("closedAt")), "PR closed"
+    elif running:
+        at, text = max(running), f"{len(running)} check{'s' * (len(running) > 1)} running"
+    elif failed and rollup.get("state") in ("FAILURE", "ERROR"):
+        at, text = max(failed)
+        if len(failed) > 1:
+            text += f" (+{len(failed) - 1} more)"
+
+    if node.get("mergedAt"):
+        alert = "merged"
+    elif node.get("state") == "CLOSED":
+        alert = "closed"
+    elif rollup.get("state") in ("FAILURE", "ERROR"):
+        alert = "failed"
+    elif node.get("reviewDecision") == "CHANGES_REQUESTED":
+        alert = "changes"
+    else:
+        alert = None
+    return {"pr_state": node.get("state"), "pr_rollup": rollup.get("state"), "pr_alert": alert,
+            "pr_event": text, "pr_event_at": at}
+
+
+def refresh_status(db) -> None:
+    """Poll PR state for open sessions: every minute while recent, every 15 minutes otherwise, daily once final."""
+    now = int(time.time())
+    rows = db.execute(
+        """SELECT session_id, coalesce(pr_ref, gh_ref) AS ref FROM items
+           WHERE state IN ('open', 'parked') AND coalesce(pr_ref, gh_ref) IS NOT NULL
+             AND coalesce(pr_checked_at, 0) < ? - CASE
+                   WHEN pr_state IN ('MERGED', 'CLOSED') THEN ?
+                   WHEN live != 'detached' OR last_activity_at > ? THEN ?
+                   ELSE ? END
+           ORDER BY live != 'detached' DESC, last_activity_at DESC LIMIT ?""",
+        (now, FINAL, now - 2 * 86400, FAST, SLOW, PRS_PER_QUERY)).fetchall()
+    targets = {}
+    for row in rows:
+        repo, _, number = row["ref"].partition("#")
+        owner, _, name = repo.partition("/")
+        if REPO_PART.match(owner) and REPO_PART.match(name) and number.isdigit():
+            targets.setdefault((owner, name, int(number)), []).append(row["session_id"])
+    if not targets:
+        return
+    query = "query {" + "".join(
+        f' p{i}: repository(owner: "{o}", name: "{n}") {{ issueOrPullRequest(number: {num}) {{ {STATUS_FIELDS} }} }}'
+        for i, (o, n, num) in enumerate(targets)) + " }"
+    out = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, timeout=30)
+    try:
+        data = json.loads(out.stdout).get("data") or {}
+    except ValueError:
+        return
+    for i, sids in enumerate(targets.values()):
+        node = ((data.get(f"p{i}") or {}).get("issueOrPullRequest")) or {}
+        status = summarize(node) if node else {}
+        for sid in sids:
+            if status:
+                db.execute("UPDATE items SET pr_state = ?, pr_rollup = ?, pr_event = ?, pr_event_at = ?, pr_alert = ?, "
+                           "pr_checked_at = ? WHERE session_id = ?",
+                           (status["pr_state"], status["pr_rollup"], status["pr_event"], status["pr_event_at"],
+                            status["pr_alert"], now, sid))
+            else:
+                db.execute("UPDATE items SET pr_checked_at = ? WHERE session_id = ?", (now, sid))
+    db.commit()

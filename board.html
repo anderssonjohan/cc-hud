@@ -20,6 +20,7 @@
   --parked: #9575cd;
   --stale: #87aec1;
   --done: #bee034;
+  --fail: #e5484d;
   --primary: #6fcdb6;
   --on-primary: #26272b;
   --button: #ffffff;
@@ -92,6 +93,7 @@ details.bay[open] > summary h2 { margin-bottom: 10px; }
 .strip::before { content: ""; background: var(--edge, var(--detached)); grid-row: 1 / span 3; margin: -10px 0; }
 .strip[data-live="waiting"], .strip[data-live="idle"] { --edge: var(--needs); }
 .strip[data-live="working"] { --edge: var(--working); }
+.strip[data-bucket="needs"] { --edge: var(--needs); }
 .strip[data-state="parked"] { --edge: var(--parked); }
 .strip[data-state="stale"] { --edge: var(--stale); }
 .strip[data-state="done"] { --edge: var(--done); }
@@ -101,6 +103,14 @@ details.bay[open] > summary h2 { margin-bottom: 10px; }
 .meta a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
 .meta a:hover { color: var(--ink); border-bottom-color: currentColor; }
 .t { font: 600 15px/1.35 var(--sans); overflow-wrap: anywhere; }
+.ci { font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.ci::before { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--detached); }
+.ci[data-status="green"]::before { background: var(--working); }
+.ci[data-status="running"]::before { background: var(--needs); animation: pulse 1.6s ease-in-out infinite; }
+.ci[data-status="failed"]::before, .ci[data-status="changes"]::before { background: var(--fail); }
+.ci[data-status="failed"], .ci[data-status="changes"] { color: var(--ink); }
+.ci[data-status="merged"]::before { background: var(--parked); }
+@keyframes pulse { 50% { opacity: .35; } }
 .strip[data-state="done"] .t { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--ink-soft); }
 .meta { color: var(--ink-soft); font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
 .meta .ask { color: var(--needs-text); font-weight: 600; }
@@ -131,7 +141,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: none
   header { padding: 16px 16px 8px; }
   header input { margin-left: 0; width: 100%; }
 }
-@media (prefers-reduced-motion: reduce) { #toast, .actions button { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  #toast, .actions button { transition: none; }
+  .ci[data-status="running"]::before { animation: none; }
+}
 </style>
 </head>
 <body>
@@ -170,6 +183,12 @@ const EMPTY = {
   stale: "No old sessions to triage.",
   done: "Mark a session done and it lands here.",
 };
+const ALERT = {
+  failed: "Checks failed",
+  changes: "Changes requested",
+  merged: "PR merged, mark done?",
+  closed: "Closed, mark done?",
+};
 let items = [];
 let byId = {};
 
@@ -178,6 +197,7 @@ function bucket(it) {
   if (it.state === "stale" && it.live === "detached") return "stale";
   if (it.state === "parked") return "parked";
   if (it.live === "waiting" || it.live === "idle") return "needs";
+  if (it.live === "detached" && ALERT[it.pr_alert]) return "needs";
   if (it.live === "working") return "working";
   return "open";
 }
@@ -227,27 +247,41 @@ function render(it, where) {
   const el = document.getElementById("strip-tpl").content.firstElementChild.cloneNode(true);
   el.dataset.live = it.live;
   el.dataset.state = it.state;
+  el.dataset.bucket = where;
   el.querySelector(".t").textContent = it.title;
   el.querySelector(".t").title = it.first_prompt || "";
   const meta = el.querySelector(".meta");
   const parts = [it.repo + (it.git_branch && it.git_branch !== "HEAD" && it.git_branch !== "main" ? " / " + it.git_branch : "")];
   if (it.linked_to && byId[it.linked_to]) parts.push("for: " + byId[it.linked_to].title);
   for (const p of parts) { const s = document.createElement("span"); s.textContent = p; meta.append(s); }
-  if (it.gh_ref && /^https:\/\/github\.com\//.test(it.gh_url || "")) {
+  // Link the PR the status line is about; the face may come from the issue that started the session.
+  const ref = it.pr_ref || it.gh_ref;
+  const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(ref || "");
+  if (m) {
     const a = document.createElement("a");
-    a.href = it.gh_url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = it.gh_ref.split("/")[1];
-    a.title = it.gh_login ? `${it.gh_ref}, opened by @${it.gh_login}` : it.gh_ref;
+    a.href = ref === it.gh_ref && /^https:\/\/github\.com\//.test(it.gh_url || "") ? it.gh_url : `https://github.com/${m[1]}/issues/${m[2]}`;
+    a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = ref.split("/")[1]; a.title = ref;
     meta.append(a);
+  }
+  if (it.gh_ref && it.gh_ref !== ref && it.gh_login) {
+    const s = document.createElement("span"); s.textContent = "for @" + it.gh_login; meta.append(s);
   }
   if (it.avatar) {
     const face = el.querySelector(".face");
-    face.src = it.avatar; face.alt = "@" + it.gh_login; face.title = "@" + it.gh_login; face.hidden = false;
+    face.src = it.avatar; face.alt = "@" + it.gh_login; face.title = `@${it.gh_login} opened ${it.gh_ref}`; face.hidden = false;
   }
   if (it.live === "waiting") {
     const s = document.createElement("span"); s.className = "ask";
     s.textContent = it.live_detail || "Waiting for input"; meta.prepend(s);
-  } else if (it.live === "idle" && where === "needs") {
-    const s = document.createElement("span"); s.className = "ask"; s.textContent = "Your turn"; meta.prepend(s);
+  } else if (where === "needs") {
+    const s = document.createElement("span"); s.className = "ask";
+    s.textContent = ALERT[it.pr_alert] || "Your turn"; meta.prepend(s);
+  }
+  if (it.pr_event) {
+    const ci = document.createElement("div"); ci.className = "ci";
+    ci.dataset.status = it.pr_alert || (it.pr_rollup === "PENDING" ? "running" : it.pr_rollup === "SUCCESS" ? "green" : "none");
+    ci.textContent = it.pr_event + (it.pr_event_at ? ", " + age(it.pr_event_at) + (age(it.pr_event_at) === "now" ? "" : " ago") : "");
+    el.querySelector(".head > div").append(ci);
   }
   el.querySelector(".age").textContent = age(it.state === "done" ? it.done_at : it.last_activity_at);
 

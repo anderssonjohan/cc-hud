@@ -43,12 +43,21 @@ CREATE TABLE IF NOT EXISTS items (
     gh_url           TEXT,
     gh_login         TEXT,
     gh_scanned       INTEGER,
-    gh_checked_at    INTEGER
+    gh_checked_at    INTEGER,
+    pr_ref           TEXT,
+    pr_state         TEXT,
+    pr_rollup        TEXT,
+    pr_event         TEXT,
+    pr_event_at      INTEGER,
+    pr_alert         TEXT,
+    pr_checked_at    INTEGER
 );
 """
 # Columns added after the first release; connect() adds them to older databases.
 ADDED_COLUMNS = {"pid": "INTEGER", "gh_ref": "TEXT", "gh_url": "TEXT", "gh_login": "TEXT",
-                 "gh_scanned": "INTEGER", "gh_checked_at": "INTEGER"}
+                 "gh_scanned": "INTEGER", "gh_checked_at": "INTEGER", "pr_ref": "TEXT", "pr_state": "TEXT",
+                 "pr_rollup": "TEXT", "pr_event": "TEXT", "pr_event_at": "INTEGER", "pr_alert": "TEXT",
+                 "pr_checked_at": "INTEGER"}
 
 
 def connect() -> sqlite3.Connection:
@@ -94,6 +103,8 @@ def scan_transcript(path: Path, tail_bytes: int | None = None) -> dict:
                 info["ai_title"] = rec.get("aiTitle")
             elif t == "last-prompt":
                 info["last_prompt"] = rec.get("lastPrompt")
+            elif t == "pr-link" and rec.get("prRepository") and rec.get("prNumber"):
+                info["pr_ref"] = f"{rec['prRepository']}#{rec['prNumber']}"
             elif t == "user":
                 content = rec.get("message", {}).get("content")
                 if isinstance(content, str) and not content.startswith("<") and not rec.get("isMeta"):
@@ -164,16 +175,17 @@ def cmd_snapshot(args=None) -> None:
         db.execute(
             """UPDATE items SET transcript_path = ?, name = coalesce(?, name), ai_title = coalesce(?, ai_title),
                  last_prompt = coalesce(?, last_prompt), git_branch = coalesce(?, git_branch),
-                 last_activity_at = max(coalesce(last_activity_at, 0), ?)
+                 pr_ref = coalesce(?, pr_ref), last_activity_at = max(coalesce(last_activity_at, 0), ?)
                WHERE session_id = ?""",
             (str(path), info.get("name"), info.get("ai_title"), info.get("last_prompt"), info.get("git_branch"),
-             info["mtime"], row["session_id"]),
+             info.get("pr_ref"), info["mtime"], row["session_id"]),
         )
     db.commit()
     try:
         import github
 
         github.refresh(db)
+        github.refresh_status(db)
     except FileNotFoundError:
         pass  # gh isn't installed: no avatars
 
@@ -194,10 +206,10 @@ def cmd_backfill(args) -> None:
         created = iso_to_epoch(info["first_ts"]) if info.get("first_ts") else info["mtime"]
         db.execute(
             """INSERT INTO items (session_id, cwd, transcript_path, git_branch, name, ai_title, first_prompt,
-                                  last_prompt, state, live, created_at, last_activity_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stale', 'detached', ?, ?)""",
+                                  last_prompt, pr_ref, state, live, created_at, last_activity_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'stale', 'detached', ?, ?)""",
             (sid, info.get("cwd"), str(path), info.get("git_branch"), info.get("name"), info.get("ai_title"),
-             info.get("first_prompt"), info.get("last_prompt"), created, info["mtime"]),
+             info.get("first_prompt"), info.get("last_prompt"), info.get("pr_ref"), created, info["mtime"]),
         )
         added += 1
     db.commit()
