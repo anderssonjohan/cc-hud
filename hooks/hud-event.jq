@@ -1,6 +1,6 @@
 def q: if . == null or . == "" then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" end;
 
-.hook_event_name as $e
+(.hook_event_name // "") as $e
 | {
     "SessionStart": "idle",
     "UserPromptSubmit": "working",
