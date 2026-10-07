@@ -66,4 +66,6 @@ section() {
 section "Needs you" "$NEEDS"
 section "Working" "state = 'open' AND live = 'working'"
 section "Open, no tab" "state = 'open' AND live = 'detached' AND pr_alert IS NULL"
-echo "Open board | href=http://localhost:7777 sfimage=rectangle.split.3x1"
+# The token signs the board in; it lives next to the DB and only this user can read it.
+token="$(cat "$(dirname "$DB")/token" 2>/dev/null)"
+echo "Open board | href=http://localhost:7777/${token:+#t=$token} sfimage=rectangle.split.3x1"

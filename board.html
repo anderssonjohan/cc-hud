@@ -211,14 +211,42 @@ function age(epoch) {
   return Math.floor(s / 86400) + "d";
 }
 
+// The menu bar and `hud.py board` open the page as /#t=<token>. Keep it for this origin (localhost:7777 only)
+// and take it out of the address bar.
+let TOKEN = "";
+const fromLink = /^#t=([\w-]+)$/.exec(location.hash);
+if (fromLink) {
+  TOKEN = fromLink[1];
+  try { localStorage.setItem("hud-token", TOKEN); } catch (e) { /* storage blocked: keep it for this tab */ }
+  history.replaceState(null, "", "/");
+} else {
+  try { TOKEN = localStorage.getItem("hud-token") || ""; } catch (e) { TOKEN = ""; }
+}
+
 async function api(path, body) {
   const r = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: { "X-HUD": "1", "Content-Type": "application/json" },
+    headers: { "X-HUD": "1", "X-HUD-Token": TOKEN, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!r.ok) throw new Error((await r.json()).error || r.statusText);
   return r.json();
+}
+
+// Avatars need the token too, which an <img src> can't send.
+const faces = new Map();
+async function showFace(img, url) {
+  if (!faces.has(url)) {
+    faces.set(url, fetch(url, { headers: { "X-HUD-Token": TOKEN } })
+      .then(r => (r.ok ? r.blob() : Promise.reject()))
+      .then(b => URL.createObjectURL(b)));
+  }
+  try {
+    img.src = await faces.get(url);
+    img.hidden = false;
+  } catch (e) {
+    faces.delete(url);
+  }
 }
 
 function toast(msg) {
@@ -274,7 +302,8 @@ function render(it, where) {
   }
   if (it.avatar) {
     const face = el.querySelector(".face");
-    face.src = it.avatar; face.alt = "@" + it.gh_login; face.title = `@${it.gh_login} opened ${it.gh_ref}`; face.hidden = false;
+    face.alt = "@" + it.gh_login; face.title = `@${it.gh_login} opened ${it.gh_ref}`;
+    showFace(face, it.avatar);
   }
   if (it.live === "waiting") {
     const s = document.createElement("span"); s.className = "ask";
@@ -361,7 +390,7 @@ async function load() {
     byId = Object.fromEntries(items.map(i => [i.session_id, i]));
     draw();
   } catch (e) {
-    toast("Can't reach the hud server: " + e.message);
+    toast(e instanceof TypeError ? "Can't reach the hud server" : e.message);
   }
 }
 

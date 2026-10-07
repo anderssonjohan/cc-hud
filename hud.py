@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import secrets
 import shlex
 import shutil
 import sqlite3
@@ -13,6 +14,8 @@ import time
 from pathlib import Path
 
 DB_PATH = Path(os.environ.get("HUD_DB", Path.home() / ".claude/hud/hud.db"))
+TOKEN_PATH = DB_PATH.parent / "token"
+BOARD_URL = "http://localhost:7777"
 PROJECTS = Path.home() / ".claude/projects"
 LIVE_STATES = ("working", "waiting", "idle")
 
@@ -476,7 +479,7 @@ def cmd_digest(args) -> None:
     if cold:
         lines.append(f"*Open but untouched ({len(cold)})*")
         lines += [line(r) for r in cold]
-    lines.append("Board: http://localhost:7777")
+    lines.append(f"Board: {BOARD_URL}")
     text = "\n".join(lines)
     if args.dry_run:
         print(text)
@@ -499,6 +502,24 @@ def cmd_digest(args) -> None:
         webhook, data=json.dumps({"text": text}).encode(), headers={"Content-Type": "application/json"}
     )
     urllib.request.urlopen(req, timeout=10)
+
+
+def token() -> str:
+    """The per-install secret the board API asks for, created on first use and readable only by this user."""
+    if not TOKEN_PATH.exists():
+        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_urlsafe(32))
+    return TOKEN_PATH.read_text().strip()
+
+
+def cmd_board(args) -> None:
+    url = f"{BOARD_URL}/#t={token()}"
+    if args.print:
+        print(url)
+    else:
+        subprocess.run(["open", url], check=False)
 
 
 def cmd_serve(args) -> None:
@@ -552,6 +573,10 @@ def main() -> None:
     s.add_argument("--cold-hours", type=float, default=24)
     s.add_argument("-n", "--dry-run", action="store_true")
     s.set_defaults(func=cmd_digest)
+
+    s = sub.add_parser("board", help="open the board in the browser, signed in")
+    s.add_argument("-p", "--print", action="store_true", help="print the URL instead")
+    s.set_defaults(func=cmd_board)
 
     s = sub.add_parser("serve", help="run the web board")
     s.add_argument("--port", type=int, default=7777)
