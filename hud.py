@@ -360,22 +360,28 @@ def cmd_ls(args) -> None:
 
 def resume_command(row) -> str:
     if row["kind"] == "background" and row["bg_id"]:
-        return f"cd {shlex.quote(row['cwd'])} && claude attach {row['bg_id']}"
-    return f"cd {shlex.quote(row['cwd'])} && claude --resume {row['session_id']}"
+        return f"cd {shlex.quote(row['cwd'])} && claude attach {shlex.quote(row['bg_id'])}"
+    return f"cd {shlex.quote(row['cwd'])} && claude --resume {shlex.quote(row['session_id'])}"
+
+
+# The command arrives as an argument, not spliced into the source: AppleScript string literals can't express
+# everything a JSON or Python escape produces (a non-ASCII folder name is enough to break them).
+OPEN_IN_ITERM = """
+on run argv
+  tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+      create window with default profile
+    else
+      tell current window to create tab with default profile
+    end if
+    tell current session of current window to write text (item 1 of argv)
+  end tell
+end run"""
 
 
 def open_in_iterm(command: str) -> None:
-    script = f"""
-tell application "iTerm"
-  activate
-  if (count of windows) = 0 then
-    create window with default profile
-  else
-    tell current window to create tab with default profile
-  end if
-  tell current session of current window to write text {json.dumps(command)}
-end tell"""
-    subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
+    subprocess.run(["osascript", "-e", OPEN_IN_ITERM, command], check=True, capture_output=True, text=True)
 
 
 def focus_tab(row) -> str:
@@ -416,7 +422,11 @@ def resume(row) -> str:
         return "already open in another tab"
     if not row["cwd"]:
         return "no cwd recorded"
-    open_in_iterm(resume_command(row))
+    try:
+        open_in_iterm(resume_command(row))
+    except (OSError, subprocess.CalledProcessError) as e:
+        detail = getattr(e, "stderr", None) or str(e)
+        return f"could not open iTerm: {detail.strip()}"
     return "opened"
 
 

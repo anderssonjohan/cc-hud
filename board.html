@@ -233,7 +233,13 @@ function button(label, onClick, primary) {
   const b = document.createElement("button");
   b.textContent = label;
   if (primary) b.className = "primary";
-  b.addEventListener("click", onClick);
+  b.addEventListener("click", async () => {
+    try {
+      await onClick();
+    } catch (e) {
+      toast(e.message || String(e));
+    }
+  });
   return b;
 }
 
@@ -289,8 +295,12 @@ function render(it, where) {
   note.value = it.note || "";
   note.addEventListener("blur", () => { if (!note.value) el.classList.remove("noting"); });
   note.addEventListener("change", async () => {
-    await api(`/api/items/${it.session_id}`, { note: note.value || null });
-    toast("Note saved");
+    try {
+      await api(`/api/items/${it.session_id}`, { note: note.value || null });
+      toast("Note saved");
+    } catch (e) {
+      toast("Note not saved: " + e.message);
+    }
   });
 
   const actions = el.querySelector(".actions");
