@@ -114,3 +114,14 @@ The board listens on `127.0.0.1` only. Requests must carry a `localhost` Host he
 
 - Name your sessions: `claude -n "reply to Maria: nightly import"`. A name you chose beats a generated title when you scan the board a week later.
 - Park what you won't touch today. "Needs you" only works as a signal if it stays short.
+
+## Development
+
+The tools run from a uv project. The app itself uses only the Python standard library, so the lock file holds just ruff and ty.
+
+```sh
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check
+```

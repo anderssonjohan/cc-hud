@@ -1,7 +1,4 @@
 #!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# ///
 """Ledger of Claude Code sessions as open loops: what needs me, what's detached, what's done."""
 
 import argparse
