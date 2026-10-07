@@ -61,7 +61,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, items())
         if self.path.startswith("/avatars/") and (path := github.avatar_path(self.path.removeprefix("/avatars/"))):
             data = path.read_bytes()
-            kind = "image/png" if data.startswith(b"\x89PNG") else "image/svg+xml" if data.startswith(b"<svg") else "image/jpeg"
+            kind = (
+                "image/png"
+                if data.startswith(b"\x89PNG")
+                else "image/svg+xml"
+                if data.startswith(b"<svg")
+                else "image/jpeg"
+            )
             return self._send(200, data, kind)
         self._send(404, {"error": "not found"})
 
