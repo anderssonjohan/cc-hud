@@ -54,10 +54,21 @@ CREATE TABLE IF NOT EXISTS items (
 );
 """
 # Columns added after the first release; connect() adds them to older databases.
-ADDED_COLUMNS = {"pid": "INTEGER", "gh_ref": "TEXT", "gh_url": "TEXT", "gh_login": "TEXT",
-                 "gh_scanned": "INTEGER", "gh_checked_at": "INTEGER", "pr_ref": "TEXT", "pr_state": "TEXT",
-                 "pr_rollup": "TEXT", "pr_event": "TEXT", "pr_event_at": "INTEGER", "pr_alert": "TEXT",
-                 "pr_checked_at": "INTEGER"}
+ADDED_COLUMNS = {
+    "pid": "INTEGER",
+    "gh_ref": "TEXT",
+    "gh_url": "TEXT",
+    "gh_login": "TEXT",
+    "gh_scanned": "INTEGER",
+    "gh_checked_at": "INTEGER",
+    "pr_ref": "TEXT",
+    "pr_state": "TEXT",
+    "pr_rollup": "TEXT",
+    "pr_event": "TEXT",
+    "pr_event_at": "INTEGER",
+    "pr_alert": "TEXT",
+    "pr_checked_at": "INTEGER",
+}
 
 
 def connect() -> sqlite3.Connection:
@@ -126,7 +137,9 @@ def iso_to_epoch(ts: str) -> int:
 
 
 def live_sessions() -> list[dict]:
-    out = subprocess.run(["claude", "agents", "--json", "--all"], capture_output=True, text=True, timeout=20)
+    out = subprocess.run(
+        ["claude", "agents", "--json", "--all"], capture_output=True, text=True, check=False, timeout=20
+    )
     return json.loads(out.stdout or "[]")
 
 
@@ -147,27 +160,43 @@ def cmd_snapshot(args=None) -> None:
         live = live_state(agent)
         if live == "detached":
             # Finished background sessions: only enrich rows we already track.
-            db.execute("UPDATE items SET kind = ?, bg_id = ? WHERE session_id = ?", (agent.get("kind"), agent.get("id"), sid))
+            db.execute(
+                "UPDATE items SET kind = ?, bg_id = ? WHERE session_id = ?", (agent.get("kind"), agent.get("id"), sid)
+            )
             continue
         seen.add(sid)
         db.execute(
-            """INSERT INTO items (session_id, cwd, kind, bg_id, pid, live, live_detail, state, created_at, last_activity_at)
+            """INSERT INTO items (session_id, cwd, kind, bg_id, pid, live, live_detail, state,
+                                  created_at, last_activity_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
                ON CONFLICT (session_id) DO UPDATE SET
                  cwd = coalesce(cwd, excluded.cwd), kind = excluded.kind, bg_id = excluded.bg_id, pid = excluded.pid,
                  live = excluded.live,
                  live_detail = CASE WHEN excluded.live = 'waiting' THEN coalesce(excluded.live_detail, live_detail) END,
                  state = CASE WHEN state = 'stale' AND excluded.live != 'detached' THEN 'open' ELSE state END""",
-            (sid, agent.get("cwd"), agent.get("kind"), agent.get("id"), agent.get("pid"), live, agent.get("waitingFor"),
-             agent.get("startedAt", now * 1000) // 1000, now),
+            (
+                sid,
+                agent.get("cwd"),
+                agent.get("kind"),
+                agent.get("id"),
+                agent.get("pid"),
+                live,
+                agent.get("waitingFor"),
+                agent.get("startedAt", now * 1000) // 1000,
+                now,
+            ),
         )
     # Anything the hooks think is live but claude no longer lists has gone away (tab closed, reboot).
     for row in db.execute(f"SELECT session_id FROM items WHERE live IN {LIVE_STATES}").fetchall():
         if row["session_id"] not in seen:
-            db.execute("UPDATE items SET live = 'detached', live_detail = NULL WHERE session_id = ?", (row["session_id"],))
+            db.execute(
+                "UPDATE items SET live = 'detached', live_detail = NULL WHERE session_id = ?", (row["session_id"],)
+            )
     # Refresh titles for anything touched in the last two days.
-    for row in db.execute("SELECT session_id, transcript_path FROM items WHERE last_activity_at > ? OR live != 'detached'",
-                          (now - 2 * 86400,)).fetchall():
+    for row in db.execute(
+        "SELECT session_id, transcript_path FROM items WHERE last_activity_at > ? OR live != 'detached'",
+        (now - 2 * 86400,),
+    ).fetchall():
         path = find_transcript(row["session_id"], row["transcript_path"])
         if not path:
             continue
@@ -177,8 +206,16 @@ def cmd_snapshot(args=None) -> None:
                  last_prompt = coalesce(?, last_prompt), git_branch = coalesce(?, git_branch),
                  pr_ref = coalesce(?, pr_ref), last_activity_at = max(coalesce(last_activity_at, 0), ?)
                WHERE session_id = ?""",
-            (str(path), info.get("name"), info.get("ai_title"), info.get("last_prompt"), info.get("git_branch"),
-             info.get("pr_ref"), info["mtime"], row["session_id"]),
+            (
+                str(path),
+                info.get("name"),
+                info.get("ai_title"),
+                info.get("last_prompt"),
+                info.get("git_branch"),
+                info.get("pr_ref"),
+                info["mtime"],
+                row["session_id"],
+            ),
         )
     db.commit()
     try:
@@ -208,8 +245,19 @@ def cmd_backfill(args) -> None:
             """INSERT INTO items (session_id, cwd, transcript_path, git_branch, name, ai_title, first_prompt,
                                   last_prompt, pr_ref, state, live, created_at, last_activity_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'stale', 'detached', ?, ?)""",
-            (sid, info.get("cwd"), str(path), info.get("git_branch"), info.get("name"), info.get("ai_title"),
-             info.get("first_prompt"), info.get("last_prompt"), info.get("pr_ref"), created, info["mtime"]),
+            (
+                sid,
+                info.get("cwd"),
+                str(path),
+                info.get("git_branch"),
+                info.get("name"),
+                info.get("ai_title"),
+                info.get("first_prompt"),
+                info.get("last_prompt"),
+                info.get("pr_ref"),
+                created,
+                info["mtime"],
+            ),
         )
         added += 1
     db.commit()
@@ -276,8 +324,10 @@ def cmd_ls(args) -> None:
     ).fetchall()
     for r in rows:
         repo = Path(r["cwd"] or "?").name
-        print(f"{r['session_id'][:8]}  {r['state']:<6} {r['live']:<8} {age(r['last_activity_at']):>4}  "
-              f"{repo:<22.22} {title(r)[:70]}")
+        print(
+            f"{r['session_id'][:8]}  {r['state']:<6} {r['live']:<8} {age(r['last_activity_at']):>4}  "
+            f"{repo:<22.22} {title(r)[:70]}"
+        )
 
 
 def resume_command(row) -> str:
@@ -287,7 +337,7 @@ def resume_command(row) -> str:
 
 
 def open_in_iterm(command: str) -> None:
-    script = f'''
+    script = f"""
 tell application "iTerm"
   activate
   if (count of windows) = 0 then
@@ -296,7 +346,7 @@ tell application "iTerm"
     tell current window to create tab with default profile
   end if
   tell current session of current window to write text {json.dumps(command)}
-end tell'''
+end tell"""
     subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
 
 
@@ -304,10 +354,12 @@ def focus_tab(row) -> str:
     """Bring the iTerm tab running a live interactive session to the front, matched by tty."""
     if not row["pid"]:
         return "no pid recorded yet"
-    tty = subprocess.run(["ps", "-o", "tty=", "-p", str(row["pid"])], capture_output=True, text=True).stdout.strip()
+    tty = subprocess.run(
+        ["ps", "-o", "tty=", "-p", str(row["pid"])], capture_output=True, text=True, check=False
+    ).stdout.strip()
     if not tty or tty == "??":
         return "session has no terminal"
-    script = f'''
+    script = f"""
 tell application "iTerm"
   repeat with w in windows
     repeat with t in tabs of w
@@ -323,8 +375,11 @@ tell application "iTerm"
     end repeat
   end repeat
   return "tab not found"
-end tell'''
-    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True).stdout.strip() or "tab not found"
+end tell"""
+    return (
+        subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False).stdout.strip()
+        or "tab not found"
+    )
 
 
 def resume(row) -> str:
@@ -358,12 +413,17 @@ def cmd_digest(args) -> None:
     now = int(time.time())
     needs = db.execute(
         "SELECT * FROM items WHERE state = 'open' AND live IN ('waiting', 'idle') AND last_activity_at < ? "
-        "ORDER BY last_activity_at", (now - args.waiting_hours * 3600,)).fetchall()
+        "ORDER BY last_activity_at",
+        (now - args.waiting_hours * 3600,),
+    ).fetchall()
     cold = db.execute(
         "SELECT * FROM items WHERE state = 'open' AND live = 'detached' AND last_activity_at < ? "
-        "ORDER BY last_activity_at", (now - args.cold_hours * 3600,)).fetchall()
+        "ORDER BY last_activity_at",
+        (now - args.cold_hours * 3600,),
+    ).fetchall()
     if not needs and not cold:
         return
+
     def line(r) -> str:
         # Only titles go to Slack, never prompt text, and escaped so a title can't ping a channel.
         name = " ".join((r["name"] or r["ai_title"] or f"untitled session {r['session_id'][:8]}").split())[:90]
@@ -383,15 +443,22 @@ def cmd_digest(args) -> None:
         print(text)
         return
     service = os.environ.get("HUD_SLACK_KEYCHAIN_SERVICE", "claude-slack-webhook")
-    webhook = os.environ.get("HUD_SLACK_WEBHOOK") or subprocess.run(
-        ["security", "find-generic-password", "-a", os.environ["USER"], "-s", service, "-w"],
-        capture_output=True, text=True).stdout.strip()
+    webhook = (
+        os.environ.get("HUD_SLACK_WEBHOOK")
+        or subprocess.run(
+            ["security", "find-generic-password", "-a", os.environ["USER"], "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    )
     if not webhook:
         sys.exit(f"set HUD_SLACK_WEBHOOK or store the webhook in Keychain as {service!r}")
     import urllib.request
 
-    req = urllib.request.Request(webhook, data=json.dumps({"text": text}).encode(),
-                                 headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        webhook, data=json.dumps({"text": text}).encode(), headers={"Content-Type": "application/json"}
+    )
     urllib.request.urlopen(req, timeout=10)
 
 

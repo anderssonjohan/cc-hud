@@ -35,7 +35,7 @@ def first_ref(path: Path) -> tuple[str, str] | None:
 
 
 def gh_json(*args: str):
-    out = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=15)
+    out = subprocess.run(["gh", "api", *args], capture_output=True, text=True, check=False, timeout=15)
     return json.loads(out.stdout) if out.returncode == 0 else None
 
 
@@ -66,7 +66,7 @@ def person(ref: str, myself: str | None) -> str | None:
 
 
 def ignored() -> set[str]:
-    """Logins to skip, such as automation accounts that look like people: one per line in ~/.claude/hud/ignore-logins."""
+    """Logins to skip, such as automation accounts that look like people. One per line in ignore-logins."""
     path = AVATARS.parent / "ignore-logins"
     return {line.strip() for line in path.read_text().splitlines() if line.strip()} if path.exists() else set()
 
@@ -82,18 +82,24 @@ def cache_avatar(login: str) -> None:
 
 def refresh(db) -> None:
     """Discover refs once per session, then resolve a few people per run so a backlog never stalls the snapshot."""
-    for row in db.execute("SELECT session_id, transcript_path FROM items WHERE gh_scanned IS NULL AND transcript_path IS NOT NULL").fetchall():
+    for row in db.execute(
+        "SELECT session_id, transcript_path FROM items WHERE gh_scanned IS NULL AND transcript_path IS NOT NULL"
+    ).fetchall():
         path = Path(row["transcript_path"] or "")
         ref = first_ref(path) if path.is_file() else None
-        db.execute("UPDATE items SET gh_scanned = 1, gh_ref = coalesce(gh_ref, ?), gh_url = coalesce(gh_url, ?) "
-                   "WHERE session_id = ?", (*(ref or (None, None)), row["session_id"]))
+        db.execute(
+            "UPDATE items SET gh_scanned = 1, gh_ref = coalesce(gh_ref, ?), gh_url = coalesce(gh_url, ?) "
+            "WHERE session_id = ?",
+            (*(ref or (None, None)), row["session_id"]),
+        )
     db.commit()
 
     now = int(time.time())
     rows = db.execute(
         "SELECT session_id, gh_ref FROM items WHERE gh_ref IS NOT NULL AND gh_login IS NULL "
         "AND coalesce(gh_checked_at, 0) < ? ORDER BY last_activity_at DESC LIMIT ?",
-        (now - RECHECK_AFTER, LOOKUPS_PER_RUN)).fetchall()
+        (now - RECHECK_AFTER, LOOKUPS_PER_RUN),
+    ).fetchall()
     if not rows:
         return
     myself = me()
@@ -104,8 +110,9 @@ def refresh(db) -> None:
                 cache_avatar(login)
         except (OSError, subprocess.SubprocessError, ValueError):
             login = None
-        db.execute("UPDATE items SET gh_login = ?, gh_checked_at = ? WHERE session_id = ?",
-                   (login, now, row["session_id"]))
+        db.execute(
+            "UPDATE items SET gh_login = ?, gh_checked_at = ? WHERE session_id = ?", (login, now, row["session_id"])
+        )
     db.commit()
 
 
@@ -133,8 +140,15 @@ STATUS_FIELDS = """
     latestReviews(first: 10) { nodes { author { login } state submittedAt } }
   }
 """
-VERB = {"SUCCESS": "passed", "FAILURE": "failed", "TIMED_OUT": "timed out", "CANCELLED": "cancelled",
-        "ACTION_REQUIRED": "needs action", "STARTUP_FAILURE": "failed", "ERROR": "failed"}
+VERB = {
+    "SUCCESS": "passed",
+    "FAILURE": "failed",
+    "TIMED_OUT": "timed out",
+    "CANCELLED": "cancelled",
+    "ACTION_REQUIRED": "needs action",
+    "STARTUP_FAILURE": "failed",
+    "ERROR": "failed",
+}
 REVIEW = {"APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "reviewed"}
 
 
@@ -152,8 +166,13 @@ def summarize(node: dict) -> dict:
     """Reduce a PR or issue to its state, check rollup, latest event and whether it needs attention."""
     if node.get("__typename") == "Issue":
         closed = node.get("state") == "CLOSED"
-        return {"pr_state": node.get("state"), "pr_rollup": None, "pr_alert": "closed" if closed else None,
-                "pr_event": "issue closed" if closed else None, "pr_event_at": epoch(node.get("closedAt"))}
+        return {
+            "pr_state": node.get("state"),
+            "pr_rollup": None,
+            "pr_alert": "closed" if closed else None,
+            "pr_event": "issue closed" if closed else None,
+            "pr_event_at": epoch(node.get("closedAt")),
+        }
     events, running, failed = [], [], []
     commit = ((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}
     rollup = commit.get("statusCheckRollup") or {}
@@ -173,8 +192,12 @@ def summarize(node: dict) -> dict:
                 failed.append(events[-1])
     for r in (node.get("latestReviews") or {}).get("nodes") or []:
         if r.get("state") in REVIEW:
-            events.append((epoch(r.get("submittedAt")) or 0,
-                           f"{reviewer((r.get('author') or {}).get('login'))} {REVIEW[r['state']]}"))
+            events.append(
+                (
+                    epoch(r.get("submittedAt")) or 0,
+                    f"{reviewer((r.get('author') or {}).get('login'))} {REVIEW[r['state']]}",
+                )
+            )
     # The line shows what matters most, not just what happened last: merged, then running, then red, then latest.
     at, text = max(events) if events else (None, None)
     if node.get("mergedAt"):
@@ -198,8 +221,13 @@ def summarize(node: dict) -> dict:
         alert = "changes"
     else:
         alert = None
-    return {"pr_state": node.get("state"), "pr_rollup": rollup.get("state"), "pr_alert": alert,
-            "pr_event": text, "pr_event_at": at}
+    return {
+        "pr_state": node.get("state"),
+        "pr_rollup": rollup.get("state"),
+        "pr_alert": alert,
+        "pr_event": text,
+        "pr_event_at": at,
+    }
 
 
 def refresh_status(db) -> None:
@@ -213,7 +241,8 @@ def refresh_status(db) -> None:
                    WHEN live != 'detached' OR last_activity_at > ? THEN ?
                    ELSE ? END
            ORDER BY live != 'detached' DESC, last_activity_at DESC LIMIT ?""",
-        (now, FINAL, now - 2 * 86400, FAST, SLOW, PRS_PER_QUERY)).fetchall()
+        (now, FINAL, now - 2 * 86400, FAST, SLOW, PRS_PER_QUERY),
+    ).fetchall()
     targets = {}
     for row in rows:
         repo, _, number = row["ref"].partition("#")
@@ -222,10 +251,14 @@ def refresh_status(db) -> None:
             targets.setdefault((owner, name, int(number)), []).append(row["session_id"])
     if not targets:
         return
-    query = "query {" + "".join(
-        f' p{i}: repository(owner: "{o}", name: "{n}") {{ issueOrPullRequest(number: {num}) {{ {STATUS_FIELDS} }} }}'
-        for i, (o, n, num) in enumerate(targets)) + " }"
-    out = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, timeout=30)
+    aliases = (
+        f'p{i}: repository(owner: "{o}", name: "{n}") {{ issueOrPullRequest(number: {num}) {{ {STATUS_FIELDS} }} }}'
+        for i, (o, n, num) in enumerate(targets)
+    )
+    query = "query { " + " ".join(aliases) + " }"
+    out = subprocess.run(
+        ["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, check=False, timeout=30
+    )
     try:
         data = json.loads(out.stdout).get("data") or {}
     except ValueError:
@@ -235,10 +268,19 @@ def refresh_status(db) -> None:
         status = summarize(node) if node else {}
         for sid in sids:
             if status:
-                db.execute("UPDATE items SET pr_state = ?, pr_rollup = ?, pr_event = ?, pr_event_at = ?, pr_alert = ?, "
-                           "pr_checked_at = ? WHERE session_id = ?",
-                           (status["pr_state"], status["pr_rollup"], status["pr_event"], status["pr_event_at"],
-                            status["pr_alert"], now, sid))
+                db.execute(
+                    "UPDATE items SET pr_state = ?, pr_rollup = ?, pr_event = ?, pr_event_at = ?, pr_alert = ?, "
+                    "pr_checked_at = ? WHERE session_id = ?",
+                    (
+                        status["pr_state"],
+                        status["pr_rollup"],
+                        status["pr_event"],
+                        status["pr_event_at"],
+                        status["pr_alert"],
+                        now,
+                        sid,
+                    ),
+                )
             else:
                 db.execute("UPDATE items SET pr_checked_at = ? WHERE session_id = ?", (now, sid))
     db.commit()
