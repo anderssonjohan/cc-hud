@@ -70,6 +70,7 @@ ADDED_COLUMNS = {
 
 
 def connect() -> sqlite3.Connection:
+    os.umask(0o077)  # the ledger holds prompt text, so its files are private to this user
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH, timeout=5)
     db.row_factory = sqlite3.Row
