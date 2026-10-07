@@ -1,7 +1,7 @@
 ---
 description: Mark this session done (or park it) on the session board
 argument-hint: "[park] [note]"
-allowed-tools: Bash(__HUD__:*)
+allowed-tools: Bash(__HUD__ done:*), Bash(__HUD__ park:*)
 ---
 
 Update this session on the session board, then reply with one short line saying what you did.
