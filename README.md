@@ -15,7 +15,7 @@ With cc-hud, closing a tab and finishing the work are two different things. I cl
 
 ## What you get
 
-- **A board** at `http://localhost:7777`. Sessions are grouped into Needs you, Working, Open (no tab), Parked, Stale and Done this week (struck through). Each has a note field and a filter.
+- **A board** at `http://localhost:7777`, opened from the menu bar or with `hud.py board`. Sessions are grouped into Needs you, Working, Open (no tab), Parked, Stale and Done this week (struck through). Each has a note field and a filter.
 - **Go to tab** brings the iTerm tab of a live session to the front. **Resume in iTerm** opens a closed session in a new tab, in the right folder.
 - **A menu bar item** (SwiftBar) with the number of sessions that need you. Click a session to jump to it.
 - **A Slack digest** twice a day. It lists sessions waiting on you for over an hour, and open sessions untouched for a day. A board you have to remember to open fails the same way idle tabs do, so this one comes to you.
@@ -108,6 +108,7 @@ hud.py open [id]
 hud.py note "text" [-s id]
 hud.py link <other> [-s id]     show that this session works for another one (a reviewer tab)
 hud.py go <id>                  focus the session's tab, or resume it in a new one
+hud.py board [-p]               open the board signed in (-p prints the URL)
 hud.py resume <id> [-p]         resume in a new iTerm tab (-p prints the command)
 hud.py digest [-n]              post the digest (-n prints it instead)
 hud.py backfill [--days 30]
@@ -131,7 +132,9 @@ The digest runs at 09:00 and 13:30. Change the times in `install.sh` and re-run 
 
 ## Security
 
-The board listens on `127.0.0.1` only. Requests must carry a `localhost` Host header, which blocks DNS rebinding. Every request that changes something needs a custom header, so other web pages can't trigger a resume from your browser.
+The board listens on `127.0.0.1` only, but other things can still reach that port, such as a dev container. So everything except the empty page needs a per-install token from `~/.claude/hud/token`, a file only you can read. The menu bar and `hud.py board` open the board as `/#t=<token>`; the page keeps the token in that origin's local storage and sends it as a header.
+
+On top of that, requests must carry a `localhost` or `127.0.0.1` Host header, which blocks DNS rebinding, and every request that changes something needs a custom header, so other web pages can't drive the board from your browser. Responses can't be framed or read cross-origin.
 
 ## Tips
 
