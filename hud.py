@@ -256,7 +256,9 @@ def cmd_snapshot(args=None) -> None:
         github.refresh(db)
         github.refresh_status(db)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
-        print(f"GitHub refresh skipped: {e}", file=sys.stderr)
+        # A timeout's message embeds the whole GraphQL query; one short line per minute is enough for the log.
+        reason = "gh timed out" if isinstance(e, subprocess.TimeoutExpired) else str(e)[:200]
+        print(f"GitHub refresh skipped: {reason}", file=sys.stderr)
 
 
 def cmd_backfill(args) -> None:
