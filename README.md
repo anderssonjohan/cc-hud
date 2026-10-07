@@ -64,13 +64,14 @@ flowchart TD
 
 The board loads nothing from the internet. Two things do leave your machine:
 
-- The snapshot job asks the GitHub API, through your own `gh` login, who opened each PR or issue your sessions link to, and downloads their avatar once into `~/.claude/hud/avatars/`. It also polls the state of those PRs: one GraphQL request a minute at most, covering only open sessions, and less often for sessions you haven't touched in two days.
-- The optional digest goes to your own Slack webhook. It contains session titles, repo folder names and ages, never prompt text.
+- The snapshot job asks the GitHub API, through your own `gh` login, who opened each PR or issue your sessions link to, and downloads their avatar once into `~/.claude/hud/avatars/`. It also polls the state of those PRs: one GraphQL request a minute at most, covering only open and parked sessions, and less often for sessions you haven't touched in two days.
+- The optional digest goes to your own Slack webhook. It contains each session's name, or else the title Claude generated for it (a short summary of the conversation), plus repo folder names and ages. Your prompt text itself is never sent.
 
 ## Requirements
 
 - macOS and iTerm2. Resume and Go to tab use iTerm's AppleScript API.
-- A Claude Code version that has `claude agents --json`.
+- A Claude Code version that has `claude agents --json`, with `claude` on your `PATH` when you install.
+- Python 3.12 or later. uv downloads it if you don't have it.
 - `uv`, `jq` and `sqlite3`.
 - Optional: [SwiftBar](https://github.com/swiftbar/SwiftBar) for the menu bar item, an authenticated [`gh`](https://cli.github.com) for avatars and PR status, and a Slack incoming webhook for the digest.
 
@@ -96,7 +97,9 @@ For the digest, store your webhook in the login Keychain:
 security add-generic-password -a "$USER" -s claude-slack-webhook -w 'https://hooks.slack.com/services/...'
 ```
 
-To remove everything except your data in `~/.claude/hud/`, run `./install.sh --uninstall`.
+To remove the hooks, `/done` and the launchd agents, run `./install.sh --uninstall`. Your data in `~/.claude/hud/` stays, and so does `settings.json.bak-cc-hud`, your settings from before the first install.
+
+The launchd agents get the `PATH` from install time. If you install `gh` later, run `./install.sh` again to get avatars and PR status.
 
 ## Command line
 
@@ -110,7 +113,7 @@ hud.py link <other> [-s id]     show that this session works for another one (a 
 hud.py go <id>                  focus the session's tab, or resume it in a new one
 hud.py board [-p]               open the board signed in (-p prints the URL)
 hud.py resume <id> [-p]         resume in a new iTerm tab (-p prints the command)
-hud.py digest [-n]              post the digest (-n prints it instead)
+hud.py digest [-n]              post the digest (-n prints it instead); --waiting-hours, --cold-hours set the thresholds
 hud.py backfill [--days 30]
 ```
 
@@ -120,8 +123,8 @@ An id can be a session id prefix, a background session id or a session name.
 
 | Variable | Default | |
 |---|---|---|
-| `HUD_DB` | `~/.claude/hud/hud.db` | Where the ledger lives |
-| `HUD_SLACK_WEBHOOK` | | Webhook URL, instead of the Keychain |
+| `HUD_DB` | `~/.claude/hud/hud.db` | Where the ledger lives. Set it when you run `install.sh`, so the hooks and launchd agents get it too |
+| `HUD_SLACK_WEBHOOK` | | Webhook URL for a manual `hud.py digest`. The scheduled digest always reads the Keychain, so the URL never lands in a plist |
 | `HUD_SLACK_KEYCHAIN_SERVICE` | `claude-slack-webhook` | Keychain item holding the webhook |
 | `HUD_BACKFILL_DAYS` | `30` | History imported on first install |
 | `HUD_LABEL_PREFIX` | `io.github.anderssonjohan.cc-hud` | launchd label prefix |
