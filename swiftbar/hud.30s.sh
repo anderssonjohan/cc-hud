@@ -3,10 +3,15 @@
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
-# <swiftbar.environment>[PATH=$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin]</swiftbar.environment>
 
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 DB="${HUD_DB:-$HOME/.claude/hud/hud.db}"
 HUD="$(cd "$(dirname "$0")/.." && pwd)/hud.py"
+
+# Menu clicks run this script again, so hud.py gets the PATH above instead of SwiftBar's minimal one.
+if [ "${1:-}" = go ] && [[ "${2:-}" =~ ^[0-9a-f-]+$ ]]; then
+  exec "$HUD" go "$2"
+fi
 q() { sqlite3 -separator $'\x1f' -cmd '.timeout 2000' "$DB" "$1" 2>/dev/null; }
 
 NEEDS="state = 'open' AND (live IN ('waiting', 'idle') OR (live = 'detached' AND pr_alert IS NOT NULL))"
@@ -53,7 +58,7 @@ section() {
     title="${title#"${title%%[!-]*}"}"
     [ ${#title} -gt 60 ] && title="${title:0:59}..."
     tip="${detail//[|\"]/-}"
-    echo "$title  $a | sfimage=$icon bash=$HUD param1=go param2=$sid terminal=false refresh=true tooltip=\"${tip:-$live}\""
+    echo "$title  $a | sfimage=$icon bash=\"$0\" param1=go param2=$sid terminal=false refresh=true tooltip=\"${tip:-$live}\""
   done <<< "$rows"
   echo "---"
 }
