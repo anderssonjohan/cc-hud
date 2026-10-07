@@ -2,6 +2,7 @@
 
 import json
 import time
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -14,11 +15,13 @@ STATES = {"open", "parked", "stale", "done"}
 
 
 def items() -> list[dict]:
-    db = hud.connect()
-    rows = db.execute(
-        "SELECT * FROM items WHERE state != 'done' OR done_at > ? ORDER BY last_activity_at DESC",
-        (int(time.time()) - 7 * 86400,),
-    ).fetchall()
+    # Close explicitly: a sqlite3 connection's statement cache refers back to it, so dropping the last reference
+    # leaves it to the cycle collector and a long-running server runs out of file descriptors first.
+    with closing(hud.connect()) as db:
+        rows = db.execute(
+            "SELECT * FROM items WHERE state != 'done' OR done_at > ? ORDER BY last_activity_at DESC",
+            (int(time.time()) - 7 * 86400,),
+        ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -78,7 +81,10 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) != 3 or parts[:1] != ["api"]:
             return self._send(404, {"error": "not found"})
         _, action, sid = parts
-        db = hud.connect()
+        with closing(hud.connect()) as db:
+            return self._post(db, action, sid)
+
+    def _post(self, db, action: str, sid: str):
         row = db.execute("SELECT * FROM items WHERE session_id = ?", (sid,)).fetchone()
         if not row:
             return self._send(404, {"error": "unknown session"})
@@ -98,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute(f"UPDATE items SET {cols} WHERE session_id = ?", (*patch.values(), sid))
                 db.commit()
             return self._send(200, {"ok": True})
-        self._send(404, {"error": "not found"})
+        return self._send(404, {"error": "not found"})
 
 
 def serve(port: int) -> None:
