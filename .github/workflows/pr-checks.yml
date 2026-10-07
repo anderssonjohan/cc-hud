@@ -67,8 +67,8 @@ jobs:
 
       - name: ShellCheck
         if: success() || failure()
-        run: shellcheck hooks/hud-event.sh install.sh swiftbar/hud.30s.sh
+        run: shellcheck hooks/hud-event.sh install.sh swiftbar/hud.30s.sh tests/hook-smoke.sh
 
-      - name: Hook filter compiles
+      - name: Hook smoke test
         if: success() || failure()
-        run: echo '{}' | jq -f hooks/hud-event.jq > /dev/null
+        run: tests/hook-smoke.sh
