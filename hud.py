@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -91,6 +92,18 @@ def find_transcript(session_id: str, hint: str | None = None) -> Path | None:
     return next(PROJECTS.glob(f"*/{session_id}.jsonl"), None)
 
 
+def typed_text(rec: dict) -> str | None:
+    """Text a person typed in a user record; None for tool results, injected context and skill text."""
+    if rec.get("isMeta") or rec.get("isCompactSummary"):
+        return None
+    content = rec.get("message", {}).get("content")
+    if isinstance(content, list):  # a prompt with pasted images
+        content = " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+    if not isinstance(content, str) or content.startswith("<") or not content.strip():
+        return None
+    return content
+
+
 def scan_transcript(path: Path, tail_bytes: int | None = None) -> dict:
     """Pull titles, prompts, cwd, branch and timestamps out of a transcript."""
     info: dict = {}
@@ -113,10 +126,8 @@ def scan_transcript(path: Path, tail_bytes: int | None = None) -> dict:
                 info["last_prompt"] = rec.get("lastPrompt")
             elif t == "pr-link" and rec.get("prRepository") and rec.get("prNumber"):
                 info["pr_ref"] = f"{rec['prRepository']}#{rec['prNumber']}"
-            elif t == "user":
-                content = rec.get("message", {}).get("content")
-                if isinstance(content, str) and not content.startswith("<") and not rec.get("isMeta"):
-                    info.setdefault("first_prompt", " ".join(content.split())[:300])
+            elif t == "user" and (text := typed_text(rec)):
+                info.setdefault("first_prompt", " ".join(text.split())[:300])
             if rec.get("cwd"):
                 info.setdefault("cwd", rec["cwd"])
             if rec.get("gitBranch"):
@@ -133,24 +144,34 @@ def iso_to_epoch(ts: str) -> int:
     return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
 
 
-def live_sessions() -> list[dict]:
-    out = subprocess.run(
-        ["claude", "agents", "--json", "--all"], capture_output=True, text=True, check=False, timeout=20
-    )
-    return json.loads(out.stdout or "[]")
+def live_sessions() -> list[dict] | None:
+    """Sessions Claude Code reports as running, or None when it can't say (failed, timed out, not on PATH)."""
+    try:
+        out = subprocess.run(
+            ["claude", "agents", "--json", "--all"], capture_output=True, text=True, check=False, timeout=20
+        )
+        data = json.loads(out.stdout) if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        data = None
+    return data if isinstance(data, list) else None
 
 
 def live_state(agent: dict) -> str:
-    if agent.get("kind") == "background":
-        return "working" if agent.get("state") in ("running", "busy") else "detached"
+    # Background sessions report a `state`; interactive ones, and background ones without a job, report `status`.
+    if agent.get("kind") == "background" and "state" in agent:
+        return {"working": "working", "blocked": "waiting"}.get(agent["state"], "detached")
     return {"busy": "working", "waiting": "waiting", "idle": "idle"}.get(agent.get("status"), "working")
 
 
 def cmd_snapshot(args=None) -> None:
     db = connect()
     now = int(time.time())
+    agents = live_sessions()
+    if agents is None:
+        # Reconciling against nothing would flip every live session to detached.
+        print("claude agents unavailable, skipping the live-state reconcile", file=sys.stderr)
     seen = set()
-    for agent in live_sessions():
+    for agent in agents or []:
         sid = agent.get("sessionId")
         if not sid:
             continue
@@ -185,19 +206,27 @@ def cmd_snapshot(args=None) -> None:
         )
     # Anything the hooks think is live but claude no longer lists has gone away (tab closed, reboot).
     for row in db.execute(f"SELECT session_id FROM items WHERE live IN {LIVE_STATES}").fetchall():
-        if row["session_id"] not in seen:
+        if agents is not None and row["session_id"] not in seen:
             db.execute(
                 "UPDATE items SET live = 'detached', live_detail = NULL WHERE session_id = ?", (row["session_id"],)
             )
     # Refresh titles for anything touched in the last two days.
     for row in db.execute(
-        "SELECT session_id, transcript_path FROM items WHERE last_activity_at > ? OR live != 'detached'",
+        "SELECT session_id, transcript_path, coalesce(pr_ref, gh_ref) AS status_ref FROM items "
+        "WHERE last_activity_at > ? OR live != 'detached'",
         (now - 2 * 86400,),
     ).fetchall():
         path = find_transcript(row["session_id"], row["transcript_path"])
         if not path:
             continue
         info = scan_transcript(path, tail_bytes=1_000_000)
+        if info.get("pr_ref") and info["pr_ref"] != row["status_ref"]:
+            # The session moved on to another PR: drop the old status so the new one is polled right away.
+            db.execute(
+                "UPDATE items SET pr_state = NULL, pr_rollup = NULL, pr_event = NULL, pr_event_at = NULL, "
+                "pr_alert = NULL, pr_checked_at = NULL WHERE session_id = ?",
+                (row["session_id"],),
+            )
         db.execute(
             """UPDATE items SET transcript_path = ?, name = coalesce(?, name), ai_title = coalesce(?, ai_title),
                  last_prompt = coalesce(?, last_prompt), git_branch = coalesce(?, git_branch),
@@ -215,13 +244,15 @@ def cmd_snapshot(args=None) -> None:
             ),
         )
     db.commit()
-    try:
-        import github
+    if not shutil.which("gh"):
+        return  # no avatars or PR status without gh
+    import github
 
+    try:
         github.refresh(db)
         github.refresh_status(db)
-    except FileNotFoundError:
-        pass  # gh isn't installed: no avatars
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f"GitHub refresh skipped: {e}", file=sys.stderr)
 
 
 def cmd_backfill(args) -> None:

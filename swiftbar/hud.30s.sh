@@ -49,6 +49,8 @@ section() {
       working) icon="ellipsis.circle" ;;
     esac
     title="${title//|/-}"
+    # SwiftBar reads a line starting with -- as a submenu item or separator.
+    title="${title#"${title%%[!-]*}"}"
     [ ${#title} -gt 60 ] && title="${title:0:59}..."
     tip="${detail//[|\"]/-}"
     echo "$title  $a | sfimage=$icon bash=$HUD param1=go param2=$sid terminal=false refresh=true tooltip=\"${tip:-$live}\""

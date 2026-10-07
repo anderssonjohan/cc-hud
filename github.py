@@ -8,6 +8,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+import hud
+
 AVATARS = Path(os.environ.get("HUD_DB", Path.home() / ".claude/hud/hud.db")).parent / "avatars"
 REF_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/(pull|issues)/(\d+)")
 LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -26,7 +28,7 @@ def first_ref(path: Path) -> tuple[str, str] | None:
                 rec = json.loads(raw)
             except ValueError:
                 continue
-            if rec.get("type") == "user" and isinstance(content := rec.get("message", {}).get("content"), str):
+            if rec.get("type") == "user" and (content := hud.typed_text(rec)):
                 if m := REF_URL.search(content):
                     return f"{m[1]}#{m[3]}", f"https://{m[0]}"
             elif rec.get("type") == "pr-link" and not fallback and rec.get("prRepository") and rec.get("prNumber"):
@@ -92,7 +94,8 @@ def refresh(db) -> None:
             "WHERE session_id = ?",
             (*(ref or (None, None)), row["session_id"]),
         )
-    db.commit()
+        # Commit per row: holding the write lock across transcript reads and network calls makes hooks give up.
+        db.commit()
 
     now = int(time.time())
     rows = db.execute(
@@ -113,7 +116,7 @@ def refresh(db) -> None:
         db.execute(
             "UPDATE items SET gh_login = ?, gh_checked_at = ? WHERE session_id = ?", (login, now, row["session_id"])
         )
-    db.commit()
+        db.commit()
 
 
 def avatar_path(login: str) -> Path | None:
