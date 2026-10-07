@@ -29,10 +29,33 @@ Claude Code's own `claude agents` shows what is live right now. cc-hud remembers
 
 ## How it works
 
-```
-Claude Code hooks --> hud-event.sh --+
-                                     +--> ~/.claude/hud/hud.db (SQLite) --> board, menu bar, digest
-claude agents --json (every 60s) ----+
+```mermaid
+flowchart TD
+    CC["Claude Code<br/>sessions"]
+    HOOK["hud-event.sh<br/>7 hook events"]
+    AG["live sessions<br/>claude agents"]
+    TR["transcripts<br/>titles, PR links"]
+    GH["GitHub via gh<br/>PR status<br/>and avatars"]
+    SNAP["snapshot<br/>every 60 s"]
+    DB[("hud.db (SQLite)")]
+    BOARD["board<br/>localhost:7777"]
+    MENU["SwiftBar menu"]
+    DIG["Slack digest<br/>twice a day"]
+    ITERM["iTerm<br/>focus or resume"]
+
+    CC --> HOOK
+    CC --> AG
+    CC --> TR
+    HOOK --> DB
+    AG --> SNAP
+    TR --> SNAP
+    GH --> SNAP
+    SNAP --> DB
+    DB --> BOARD
+    DB --> MENU
+    DB --> DIG
+    BOARD --> ITERM
+    MENU --> ITERM
 ```
 
 - A hook on seven lifecycle events records each session's live state: working, waiting for input, idle, or gone. It takes about 20 ms and never fails the session.
