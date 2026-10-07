@@ -47,6 +47,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        if ctype == "image/svg+xml":
+            self.send_header("Content-Security-Policy", "script-src 'none'")
         self.end_headers()
         self.wfile.write(data)
 
@@ -59,7 +61,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, items())
         if self.path.startswith("/avatars/") and (path := github.avatar_path(self.path.removeprefix("/avatars/"))):
             data = path.read_bytes()
-            return self._send(200, data, "image/png" if data.startswith(b"\x89PNG") else "image/jpeg")
+            kind = "image/png" if data.startswith(b"\x89PNG") else "image/svg+xml" if data.startswith(b"<svg") else "image/jpeg"
+            return self._send(200, data, kind)
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
