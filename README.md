@@ -147,4 +147,5 @@ uv sync
 uv run ruff check .
 uv run ruff format --check .
 uv run ty check
+tests/hook-smoke.sh   # real hook payloads against a scratch database
 ```
