@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run --script
+#!/usr/bin/env -S uv run --no-project --script
 """Ledger of Claude Code sessions as open loops: what needs me, what's detached, what's done."""
 
 import argparse
