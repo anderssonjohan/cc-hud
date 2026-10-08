@@ -368,6 +368,31 @@ def cmd_link(args) -> None:
     print(f"{title(row)} -> {title(other)}")
 
 
+def cmd_ref(args) -> None:
+    """Set the PR or issue a session is about by hand, when the first link in its prompts was only an example."""
+    import github
+
+    if args.ref == "none":
+        ref = url = None
+    elif m := github.REF_URL.search(args.ref):
+        ref, url = f"{m[1]}#{m[3]}", f"https://{m[0]}"
+    elif PR_REF.match(args.ref):
+        ref, url = args.ref, None
+    else:
+        sys.exit(f"expected a GitHub PR or issue URL, owner/repo#N or none, got {args.ref!r}")
+    db = connect()
+    row = resolve(db, args.session)
+    # gh_scanned = 2 keeps the hook and the transcript scan from putting their own guess back.
+    db.execute(
+        "UPDATE items SET gh_ref = ?, gh_url = ?, gh_scanned = 2, gh_login = NULL, gh_checked_at = NULL, "
+        "pr_state = NULL, pr_rollup = NULL, pr_event = NULL, pr_event_at = NULL, pr_alert = NULL, "
+        "pr_checked_at = NULL WHERE session_id = ?",
+        (ref, url, row["session_id"]),
+    )
+    db.commit()
+    print(f"{title(row)} -> {ref or 'no PR or issue'}")
+
+
 def cmd_split(args) -> None:
     """Start a thread of its own for a session that /clear joined to work it has nothing to do with."""
     db = connect()
@@ -684,6 +709,11 @@ def main() -> None:
     s.add_argument("other")
     s.add_argument("-s", "--session")
     s.set_defaults(func=cmd_link)
+
+    s = sub.add_parser("ref", help="set the PR or issue a session is about, when the guess from its prompts is wrong")
+    s.add_argument("ref", help="a GitHub PR or issue URL, owner/repo#N, or none")
+    s.add_argument("-s", "--session")
+    s.set_defaults(func=cmd_ref)
 
     s = sub.add_parser("split", help="take a session out of the thread /clear joined it to")
     s.add_argument("session", nargs="?")

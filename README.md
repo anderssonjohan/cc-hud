@@ -20,7 +20,7 @@ With cc-hud, closing a tab and finishing the work are two different things. I cl
 - **A menu bar item** (SwiftBar) with the number of sessions that need you. Click a session to jump to it.
 - **A Slack digest** twice a day. It lists sessions waiting on you for over an hour, and open sessions untouched for a day, unless their next step is a wait. A board you have to remember to open fails the same way idle tabs do, so this one comes to you.
 - **PR status on each session.** A session's strip shows the last thing that happened on its pull request: `commitlint failed, 5m ago`, `2 checks running`, `Copilot reviewed, 1m ago`. Claude Code records which PRs a session opened or pushed to, so this works without any setup in your sessions. When a closed tab's PR goes red, gets changes requested or is merged, the session moves to Needs you. A merged PR asks whether you want to mark the session done.
-- **Faces of the people you're helping.** When a session is about a GitHub PR or issue, its strip shows the avatar of whoever opened it and links to it. Your own PRs show an assignee instead, or no face.
+- **Faces of the people you're helping.** When a session is about a GitHub PR or issue, its strip shows the avatar of whoever opened it and links to it. Your own PRs show an assignee instead, or no face. The session is taken to be about the first PR or issue linked in your prompts; when that link was only an example, `hud.py ref` sets the right one.
 - **Work that survives `/clear`.** Clearing a session to hand the work on to a fresh one keeps it on the board: the new session takes over the card, with its note and PR status. Close the card with `/done` when the work is finished, not when the context is.
 - **Steps, with the waits ticked for you.** `/steps` turns what is left into a list on the card, shown as `2/4 next: trigger the downstream release`. A step that waits for a PR to merge, or for the first release after the steps before it, ticks itself. When the wait comes through and the next step is yours, the card moves to Needs you.
 - **`/done`** inside any session marks it done. `/done park back next cycle` parks it with a note. Typing in a done or parked session reopens it.
@@ -112,6 +112,7 @@ hud.py park [id] [-m note]
 hud.py open [id]
 hud.py note "text" [-s id]
 hud.py link <other> [-s id]     show that this session works for another one (a reviewer tab)
+hud.py ref <url|none> [-s id]   set the PR or issue the session is about (also owner/repo#12)
 hud.py split [id]               take a session out of the work /clear joined it to
 hud.py step add "text"          add a step; --pr owner/repo#12 or --release owner/repo[@v2.*] waits instead
 hud.py step done|undo|rm <n>

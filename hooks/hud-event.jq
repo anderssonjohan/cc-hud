@@ -34,16 +34,17 @@ def q: if . == null or . == "" then "NULL" else "'" + (tostring | gsub("'"; "''"
      transcript_path = coalesce(excluded.transcript_path, transcript_path),
      first_prompt = coalesce(first_prompt, excluded.first_prompt),
      last_prompt = coalesce(excluded.last_prompt, last_prompt),
-     gh_ref = coalesce(gh_ref, excluded.gh_ref),
-     gh_url = coalesce(gh_url, excluded.gh_url),
+     gh_ref = CASE WHEN gh_scanned = 2 THEN gh_ref ELSE coalesce(gh_ref, excluded.gh_ref) END,
+     gh_url = CASE WHEN gh_scanned = 2 THEN gh_url ELSE coalesce(gh_url, excluded.gh_url) END,
      last_activity_at = excluded.last_activity_at,
      state = CASE WHEN \($e == "UserPromptSubmit") AND state != 'open' THEN 'open'
                   WHEN \($cleared) AND state != 'done' THEN 'cleared' ELSE state END,
      done_at = CASE WHEN \($e == "UserPromptSubmit") THEN NULL ELSE done_at END;"
   + if $predecessor == null then "" else "
-   UPDATE items SET (thread_id, note, gh_ref, gh_url, gh_login, gh_checked_at, pr_ref, pr_state, pr_rollup, pr_event,
-                     pr_event_at, pr_alert, pr_checked_at) =
-     (SELECT coalesce(p.thread_id, p.session_id), p.note, p.gh_ref, p.gh_url, p.gh_login, p.gh_checked_at, p.pr_ref,
-             p.pr_state, p.pr_rollup, p.pr_event, p.pr_event_at, p.pr_alert, p.pr_checked_at
+   UPDATE items SET (thread_id, note, gh_ref, gh_url, gh_login, gh_scanned, gh_checked_at, pr_ref, pr_state, pr_rollup,
+                     pr_event, pr_event_at, pr_alert, pr_checked_at) =
+     (SELECT coalesce(p.thread_id, p.session_id), p.note, p.gh_ref, p.gh_url, p.gh_login,
+             CASE WHEN p.gh_scanned = 2 THEN 2 END, p.gh_checked_at, p.pr_ref, p.pr_state, p.pr_rollup, p.pr_event,
+             p.pr_event_at, p.pr_alert, p.pr_checked_at
       \($predecessor) ORDER BY p.last_activity_at DESC LIMIT 1)
    WHERE session_id = \(.session_id | q) AND thread_id IS NULL AND EXISTS (SELECT 1 \($predecessor));" end
