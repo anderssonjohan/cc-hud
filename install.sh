@@ -9,7 +9,7 @@ HUD="$REPO/hud.py"
 HOOK="$REPO/hooks/hud-event.sh"
 HUD_HOME="$HOME/.claude/hud"
 SETTINGS="$HOME/.claude/settings.json"
-COMMAND="$HOME/.claude/commands/done.md"
+COMMANDS="$HOME/.claude/commands"
 PREFIX="${HUD_LABEL_PREFIX:-io.github.anderssonjohan.cc-hud}"
 EVENTS='["SessionStart","UserPromptSubmit","Notification","PermissionRequest","Stop","SessionEnd","PostToolUse"]'
 
@@ -64,9 +64,10 @@ add_hooks() {
       .hooks[$e] = ((.hooks[$e] // []) + [{"hooks": [{"type": "command", "command": $cmd, "timeout": 3}]}]))'
 }
 
-install_command() {
-  if [ -f "$COMMAND" ] && ! grep -qF "hud.py done" "$COMMAND"; then
-    echo "skipped /done: $COMMAND already exists and isn't ours" >&2
+install_command() { # name
+  local dest="$COMMANDS/$1.md"
+  if [ -f "$dest" ] && ! grep -qF "hud.py" "$dest"; then
+    echo "skipped /$1: $dest already exists and isn't ours" >&2
     return 0
   fi
   local tmp
@@ -76,8 +77,8 @@ install_command() {
     out = ""
     while ((i = index($0, "__HUD__")) > 0) { out = out substr($0, 1, i - 1) ENVIRON["HUD_PATH"]; $0 = substr($0, i + 7) }
     print out $0
-  }' "$REPO/commands/done.md" > "$tmp"
-  mv "$tmp" "$COMMAND"
+  }' "$REPO/commands/$1.md" > "$tmp"
+  mv "$tmp" "$dest"
 }
 
 unload() { # label
@@ -116,18 +117,21 @@ if [ "${1:-}" = "--uninstall" ]; then
     unload "$PREFIX.$name"
     rm -f "$HOME/Library/LaunchAgents/$PREFIX.$name.plist"
   done
-  grep -qF "hud.py done" "$COMMAND" 2>/dev/null && rm -f "$COMMAND"
+  for name in "done" steps; do
+    grep -qF "hud.py" "$COMMANDS/$name.md" 2>/dev/null && rm -f "$COMMANDS/$name.md"
+  done
   echo "Uninstalled. Your data is still in $HUD_HOME, and your settings from before the first install in $SETTINGS.bak-cc-hud."
   exit 0
 fi
 
 need uv jq sqlite3 claude
-mkdir -p "$HUD_HOME" "$HOME/.claude/commands"
+mkdir -p "$HUD_HOME" "$COMMANDS"
 chmod 700 "$HUD_HOME"
 
 "$HUD" ls >/dev/null
 add_hooks
-install_command
+install_command "done"
+install_command steps
 
 # Backfill until it has completed once; an interrupted first run is picked up again by the next install.
 if [ ! -e "$HUD_HOME/.backfilled" ]; then

@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -51,8 +52,22 @@ CREATE TABLE IF NOT EXISTS items (
     pr_event         TEXT,
     pr_event_at      INTEGER,
     pr_alert         TEXT,
-    pr_checked_at    INTEGER
+    pr_checked_at    INTEGER,
+    thread_id        TEXT
 );
+CREATE TABLE IF NOT EXISTS steps (
+    id         INTEGER PRIMARY KEY,
+    thread_id  TEXT NOT NULL,
+    pos        INTEGER NOT NULL,
+    title      TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'manual',
+    cond       TEXT,
+    detail     TEXT,
+    created_at INTEGER,
+    checked_at INTEGER,
+    done_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS steps_by_thread ON steps (thread_id, pos);
 """
 # Columns added after the first release; connect() adds them to older databases.
 ADDED_COLUMNS = {
@@ -69,7 +84,18 @@ ADDED_COLUMNS = {
     "pr_event_at": "INTEGER",
     "pr_alert": "TEXT",
     "pr_checked_at": "INTEGER",
+    "thread_id": "TEXT",
 }
+# A session continues the thread of the one it was cleared from; the first session of a thread names it.
+THREAD = "coalesce(items.thread_id, items.session_id)"
+# The thread's next step is the user's and the one before it was a wait that has just come through.
+STEP_READY = f"""EXISTS (
+    SELECT 1 FROM steps n JOIN steps w ON w.thread_id = n.thread_id AND w.pos = n.pos - 1
+    WHERE n.thread_id = {THREAD} AND n.kind = 'manual' AND n.done_at IS NULL
+      AND w.kind != 'manual' AND w.done_at IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM steps e WHERE e.thread_id = n.thread_id AND e.pos < n.pos AND e.done_at IS NULL))"""
+PR_REF = re.compile(r"^[\w.-]+/[\w.-]+#\d+$")
+RELEASE_REF = re.compile(r"^[\w.-]+/[\w.-]+(@\S+)?$")
 
 
 def connect() -> sqlite3.Connection:
@@ -84,6 +110,10 @@ def connect() -> sqlite3.Connection:
         if col not in have:
             db.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
     return db
+
+
+def thread_of(row) -> str:
+    return row["thread_id"] or row["session_id"]
 
 
 def title(row) -> str:
@@ -338,6 +368,101 @@ def cmd_link(args) -> None:
     print(f"{title(row)} -> {title(other)}")
 
 
+def cmd_split(args) -> None:
+    """Start a thread of its own for a session that /clear joined to work it has nothing to do with."""
+    db = connect()
+    row = resolve(db, args.session)
+    old = thread_of(row)
+    if old == row["session_id"]:
+        sys.exit(f"{title(row)} already starts its own thread")
+    db.execute(
+        "UPDATE items SET thread_id = NULL, note = NULL, gh_ref = NULL, gh_url = NULL, gh_login = NULL, "
+        "gh_scanned = NULL, pr_ref = NULL, pr_state = NULL, pr_rollup = NULL, pr_event = NULL, pr_event_at = NULL, "
+        "pr_alert = NULL, pr_checked_at = NULL WHERE session_id = ?",
+        (row["session_id"],),
+    )
+    # The thread it left keeps its steps; bring back its latest session so the work has a card again.
+    db.execute(
+        f"UPDATE items SET state = 'open' WHERE session_id = (SELECT session_id FROM items WHERE {THREAD} = ? "
+        "AND state = 'cleared' ORDER BY last_activity_at DESC LIMIT 1)",
+        (old,),
+    )
+    db.commit()
+    print(f"{title(row)} now starts its own thread")
+
+
+def step_rows(db, thread: str) -> list[sqlite3.Row]:
+    return db.execute("SELECT * FROM steps WHERE thread_id = ? ORDER BY pos", (thread,)).fetchall()
+
+
+def print_steps(db, thread: str) -> None:
+    steps = step_rows(db, thread)
+    if not steps:
+        print("no steps")
+        return
+    for s in steps:
+        wait = " (waits)" if s["kind"] != "manual" and not s["done_at"] else ""
+        detail = f" ({s['detail']})" if s["detail"] else ""
+        print(f"{s['pos']}. [{'x' if s['done_at'] else ' '}] {s['title']}{wait}{detail}")
+    print(f"{sum(1 for s in steps if s['done_at'])}/{len(steps)} done")
+
+
+def find_step(db, thread: str, pos: int) -> sqlite3.Row:
+    step = db.execute("SELECT * FROM steps WHERE thread_id = ? AND pos = ?", (thread, pos)).fetchone()
+    if not step:
+        sys.exit(f"no step {pos}")
+    return step
+
+
+def cmd_step_add(args) -> None:
+    db = connect()
+    thread = thread_of(resolve(db, args.session))
+    if args.pr:
+        if not PR_REF.match(args.pr):
+            sys.exit("--pr takes owner/repo#123")
+        kind, cond, default = "pr_merged", args.pr, f"{args.pr} merged"
+    elif args.release:
+        if not RELEASE_REF.match(args.release):
+            sys.exit("--release takes owner/repo, or owner/repo@<tag pattern> such as owner/repo@v2.*")
+        repo, _, pattern = args.release.partition("@")
+        kind, cond, default = "release", args.release, f"{repo} released" + (f" ({pattern})" if pattern else "")
+    else:
+        if not args.title:
+            sys.exit("a step needs a title, --pr or --release")
+        kind, cond, default = "manual", None, args.title
+    db.execute(
+        "INSERT INTO steps (thread_id, pos, title, kind, cond, created_at) "
+        "VALUES (?, (SELECT coalesce(max(pos), 0) + 1 FROM steps WHERE thread_id = ?), ?, ?, ?, ?)",
+        (thread, thread, " ".join((args.title or default).split()), kind, cond, int(time.time())),
+    )
+    db.commit()
+    print_steps(db, thread)
+
+
+def cmd_step_done(args, done: bool) -> None:
+    db = connect()
+    thread = thread_of(resolve(db, args.session))
+    step = find_step(db, thread, args.n)
+    db.execute("UPDATE steps SET done_at = ? WHERE id = ?", (int(time.time()) if done else None, step["id"]))
+    db.commit()
+    print_steps(db, thread)
+
+
+def cmd_step_rm(args) -> None:
+    db = connect()
+    thread = thread_of(resolve(db, args.session))
+    step = find_step(db, thread, args.n)
+    db.execute("DELETE FROM steps WHERE id = ?", (step["id"],))
+    db.execute("UPDATE steps SET pos = pos - 1 WHERE thread_id = ? AND pos > ?", (thread, step["pos"]))
+    db.commit()
+    print_steps(db, thread)
+
+
+def cmd_step_ls(args) -> None:
+    db = connect()
+    print_steps(db, thread_of(resolve(db, args.session)))
+
+
 def age(epoch: int | None) -> str:
     if not epoch:
         return "?"
@@ -356,11 +481,15 @@ def cmd_ls(args) -> None:
         "ORDER BY live = 'waiting' DESC, live = 'idle' DESC, live = 'working' DESC, last_activity_at DESC",
         states,
     ).fetchall()
+    progress = {
+        r["thread_id"]: f" [{r['done']}/{r['total']}]"
+        for r in db.execute("SELECT thread_id, count(done_at) AS done, count(*) AS total FROM steps GROUP BY thread_id")
+    }
     for r in rows:
         repo = Path(r["cwd"] or "?").name
         print(
             f"{r['session_id'][:8]}  {r['state']:<6} {r['live']:<8} {age(r['last_activity_at']):>4}  "
-            f"{repo:<22.22} {title(r)[:70]}"
+            f"{repo:<22.22} {title(r)[:70]}{progress.get(thread_of(r), '')}"
         )
 
 
@@ -460,9 +589,11 @@ def cmd_digest(args) -> None:
         "ORDER BY last_activity_at",
         (now - args.waiting_hours * 3600,),
     ).fetchall()
+    # A thread whose next step is a wait is being watched, not forgotten.
     cold = db.execute(
         "SELECT * FROM items WHERE state = 'open' AND live = 'detached' AND last_activity_at < ? "
-        "ORDER BY last_activity_at",
+        f"AND coalesce((SELECT kind FROM steps WHERE thread_id = {THREAD} AND done_at IS NULL ORDER BY pos LIMIT 1), "
+        "'manual') = 'manual' ORDER BY last_activity_at",
         (now - args.cold_hours * 3600,),
     ).fetchall()
     if not needs and not cold:
@@ -553,6 +684,32 @@ def main() -> None:
     s.add_argument("other")
     s.add_argument("-s", "--session")
     s.set_defaults(func=cmd_link)
+
+    s = sub.add_parser("split", help="take a session out of the thread /clear joined it to")
+    s.add_argument("session", nargs="?")
+    s.set_defaults(func=cmd_split)
+
+    s = sub.add_parser("step", help="the steps left in this piece of work, kept across /clear")
+    steps = s.add_subparsers(required=True)
+    t = steps.add_parser("add", help="add a step at the end")
+    t.add_argument("title", nargs="?")
+    wait = t.add_mutually_exclusive_group()
+    wait.add_argument("--pr", metavar="OWNER/REPO#N", help="done by itself when this PR is merged")
+    wait.add_argument(
+        "--release", metavar="OWNER/REPO[@PATTERN]", help="done by itself when the repo publishes its next release"
+    )
+    t.set_defaults(func=cmd_step_add)
+    for name, done in (("done", True), ("undo", False)):
+        t = steps.add_parser(name, help=f"mark step N {'done' if done else 'not done'}")
+        t.add_argument("n", type=int)
+        t.set_defaults(func=lambda a, d=done: cmd_step_done(a, d))
+    t = steps.add_parser("rm", help="remove step N")
+    t.add_argument("n", type=int)
+    t.set_defaults(func=cmd_step_rm)
+    t = steps.add_parser("ls", help="list the steps")
+    t.set_defaults(func=cmd_step_ls)
+    for t in steps.choices.values():
+        t.add_argument("-s", "--session", help="a session in the thread (default: the current one)")
 
     s = sub.add_parser("resume", help="open a session in a new iTerm tab")
     s.add_argument("session")

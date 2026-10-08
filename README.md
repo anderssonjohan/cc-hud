@@ -18,9 +18,11 @@ With cc-hud, closing a tab and finishing the work are two different things. I cl
 - **A board** at `http://localhost:7777`, opened from the menu bar or with `hud.py board`. Sessions are grouped into Needs you, Working, Open (no tab), Parked, Stale and Done this week (struck through). Each has a note field and a filter.
 - **Go to tab** brings the iTerm tab of a live session to the front. **Resume in iTerm** opens a closed session in a new tab, in the right folder.
 - **A menu bar item** (SwiftBar) with the number of sessions that need you. Click a session to jump to it.
-- **A Slack digest** twice a day. It lists sessions waiting on you for over an hour, and open sessions untouched for a day. A board you have to remember to open fails the same way idle tabs do, so this one comes to you.
+- **A Slack digest** twice a day. It lists sessions waiting on you for over an hour, and open sessions untouched for a day, unless their next step is a wait. A board you have to remember to open fails the same way idle tabs do, so this one comes to you.
 - **PR status on each session.** A session's strip shows the last thing that happened on its pull request: `commitlint failed, 5m ago`, `2 checks running`, `Copilot reviewed, 1m ago`. Claude Code records which PRs a session opened or pushed to, so this works without any setup in your sessions. When a closed tab's PR goes red, gets changes requested or is merged, the session moves to Needs you. A merged PR asks whether you want to mark the session done.
 - **Faces of the people you're helping.** When a session is about a GitHub PR or issue, its strip shows the avatar of whoever opened it and links to it. Your own PRs show an assignee instead, or no face.
+- **Work that survives `/clear`.** Clearing a session to hand the work on to a fresh one keeps it on the board: the new session takes over the card, with its note and PR status. Close the card with `/done` when the work is finished, not when the context is.
+- **Steps, with the waits ticked for you.** `/steps` turns what is left into a list on the card, shown as `2/4 next: trigger the downstream release`. A step that waits for a PR to merge, or for the first release after the steps before it, ticks itself. When the wait comes through and the next step is yours, the card moves to Needs you.
 - **`/done`** inside any session marks it done. `/done park back next cycle` parks it with a note. Typing in a done or parked session reopens it.
 
 <img alt="The menu bar item open: five sessions under Needs you, two under Working and two under Open, no tab" src="docs/menubar.png" width="460">
@@ -64,7 +66,7 @@ flowchart TD
 
 The board loads nothing from the internet. Two things do leave your machine:
 
-- The snapshot job asks the GitHub API, through your own `gh` login, who opened each PR or issue your sessions link to, and downloads their avatar once into `~/.claude/hud/avatars/`. It also polls the state of those PRs: one GraphQL request a minute at most, covering only open and parked sessions, and less often for sessions you haven't touched in two days.
+- The snapshot job asks the GitHub API, through your own `gh` login, who opened each PR or issue your sessions link to, and downloads their avatar once into `~/.claude/hud/avatars/`. It also polls the state of those PRs, and of the PRs and releases your steps wait for: one GraphQL request a minute at most, covering only open and parked sessions, and less often for sessions and steps you haven't touched in two days.
 - The optional digest goes to your own Slack webhook. It contains each session's name, or else the title Claude generated for it (a short summary of the conversation), plus repo folder names and ages. Your prompt text itself is never sent.
 
 ## Requirements
@@ -86,7 +88,7 @@ cd cc-hud
 The script changes these things, and is safe to re-run:
 
 - Adds the hook to seven events in `~/.claude/settings.json`. It saves a backup as `settings.json.bak-cc-hud` first.
-- Installs `/done` as `~/.claude/commands/done.md`, unless you already have a different command with that name.
+- Installs `/done` and `/steps` into `~/.claude/commands/`, unless you already have different commands with those names.
 - Installs three launchd agents: the board server, the 60-second snapshot and the digest.
 
 For the menu bar, open SwiftBar and set its plugin folder to `cc-hud/swiftbar`.
@@ -97,7 +99,7 @@ For the digest, store your webhook in the login Keychain:
 security add-generic-password -a "$USER" -s claude-slack-webhook -w 'https://hooks.slack.com/services/...'
 ```
 
-To remove the hooks, `/done` and the launchd agents, run `./install.sh --uninstall`. Your data in `~/.claude/hud/` stays, and so does `settings.json.bak-cc-hud`, your settings from before the first install.
+To remove the hooks, `/done`, `/steps` and the launchd agents, run `./install.sh --uninstall`. Your data in `~/.claude/hud/` stays, and so does `settings.json.bak-cc-hud`, your settings from before the first install.
 
 The launchd agents get the `PATH` from install time. If you install `gh` later, run `./install.sh` again to get avatars and PR status.
 
@@ -110,6 +112,10 @@ hud.py park [id] [-m note]
 hud.py open [id]
 hud.py note "text" [-s id]
 hud.py link <other> [-s id]     show that this session works for another one (a reviewer tab)
+hud.py split [id]               take a session out of the work /clear joined it to
+hud.py step add "text"          add a step; --pr owner/repo#12 or --release owner/repo[@v2.*] waits instead
+hud.py step done|undo|rm <n>
+hud.py step ls
 hud.py go <id>                  focus the session's tab, or resume it in a new one
 hud.py board [-p]               open the board signed in (-p prints the URL)
 hud.py resume <id> [-p]         resume in a new iTerm tab (-p prints the command)
@@ -142,6 +148,7 @@ On top of that, requests must carry a `localhost` or `127.0.0.1` Host header, wh
 ## Tips
 
 - Name your sessions: `claude -n "reply to Maria: nightly import"`. A name you chose beats a generated title when you scan the board a week later.
+- Before you `/clear`, run `/steps` with what is left. The waits then watch themselves, and the next session starts from the list instead of from memory.
 - Park what you won't touch today. "Needs you" only works as a signal if it stays short.
 
 ## Development

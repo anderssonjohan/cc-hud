@@ -90,7 +90,7 @@ details.bay[open] > summary h2 { margin-bottom: 10px; }
   background: var(--strip); border-radius: .5rem; margin-top: 8px;
   padding: 10px 12px 10px 0; box-shadow: var(--shadow-strip); overflow: hidden;
 }
-.strip::before { content: ""; background: var(--edge, var(--detached)); grid-row: 1 / span 3; margin: -10px 0; }
+.strip::before { content: ""; background: var(--edge, var(--detached)); grid-row: 1 / span 4; margin: -10px 0; }
 .strip[data-live="waiting"], .strip[data-live="idle"] { --edge: var(--needs); }
 .strip[data-live="working"] { --edge: var(--working); }
 .strip[data-bucket="needs"] { --edge: var(--needs); }
@@ -115,6 +115,14 @@ details.bay[open] > summary h2 { margin-bottom: 10px; }
 .meta { color: var(--ink-soft); font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
 .meta .ask { color: var(--needs-text); font-weight: 600; }
 .age { font: 12px/1.6 var(--mono); color: var(--ink-soft); text-align: right; }
+.steps { grid-column: 2 / 4; font-size: 13px; color: var(--ink-soft); margin-top: 6px; }
+.steps summary { cursor: pointer; border-radius: .25rem; }
+.steps summary b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.steps ol { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; }
+.steps label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.steps input { margin: 0; accent-color: var(--primary); }
+.steps li[data-done] span:first-of-type { text-decoration: line-through; }
+.steps .wait { font-size: 12px; }
 .note {
   grid-column: 2 / 4; font-size: 14px; border: 0; background: transparent; color: var(--ink);
   padding: 2px 0; font-family: inherit; border-bottom: 1px dashed transparent;
@@ -199,13 +207,22 @@ const ALERT = {
 };
 let items = [];
 let byId = {};
+// Step lists the user opened stay open across the 5-second redraw.
+const openSteps = new Set();
+
+const nextStep = it => it.steps.find(s => !s.done_at);
+
+// A merged PR only means "done?" when the thread has no steps left after it.
+function prAlert(it) {
+  return ["merged", "closed"].includes(it.pr_alert) && nextStep(it) ? null : it.pr_alert;
+}
 
 function bucket(it) {
   if (it.state === "done") return "done";
   if (it.state === "stale" && it.live === "detached") return "stale";
   if (it.state === "parked") return "parked";
   if (it.live === "waiting" || it.live === "idle") return "needs";
-  if (it.live === "detached" && ALERT[it.pr_alert]) return "needs";
+  if (it.live === "detached" && (ALERT[prAlert(it)] || it.step_ready)) return "needs";
   if (it.live === "working") return "working";
   return "open";
 }
@@ -322,7 +339,7 @@ function render(it, where) {
     s.textContent = it.live_detail || "Waiting for input"; meta.prepend(s);
   } else if (where === "needs") {
     const s = document.createElement("span"); s.className = "ask";
-    s.textContent = ALERT[it.pr_alert] || "Your turn"; meta.prepend(s);
+    s.textContent = it.step_ready ? "Your turn: " + nextStep(it).title : ALERT[prAlert(it)] || "Your turn"; meta.prepend(s);
   }
   if (it.pr_event) {
     const ci = document.createElement("div"); ci.className = "ci";
@@ -331,6 +348,7 @@ function render(it, where) {
     el.querySelector(".head > div").append(ci);
   }
   el.querySelector(".age").textContent = age(it.state === "done" ? it.done_at : it.last_activity_at);
+  if (it.steps.length) el.querySelector(".note").before(renderSteps(it));
 
   const note = el.querySelector(".note");
   note.value = it.note || "";
@@ -375,11 +393,52 @@ function render(it, where) {
   return el;
 }
 
+function renderSteps(it) {
+  const box = document.createElement("details");
+  box.className = "steps";
+  const key = it.thread_id || it.session_id;
+  box.open = openSteps.has(key);
+  box.addEventListener("toggle", () => (box.open ? openSteps.add(key) : openSteps.delete(key)));
+  const done = it.steps.filter(s => s.done_at).length;
+  const next = nextStep(it);
+  const summary = document.createElement("summary");
+  const n = document.createElement("b");
+  n.textContent = `${done}/${it.steps.length}`;
+  summary.append(n, next ? (next.kind === "manual" ? " next: " : " waiting: ") + next.title : " steps done");
+  const list = document.createElement("ol");
+  for (const s of it.steps) {
+    const li = document.createElement("li");
+    if (s.done_at) li.dataset.done = "";
+    const label = document.createElement("label");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = !!s.done_at;
+    check.addEventListener("change", async () => {
+      try {
+        await api(`/api/steps/${s.id}`, { done: check.checked });
+        load();
+      } catch (e) {
+        check.checked = !check.checked;
+        toast("Step not saved: " + e.message);
+      }
+    });
+    const text = document.createElement("span");
+    text.textContent = s.title;
+    label.append(check, text);
+    const hint = s.detail || (s.kind !== "manual" && !s.done_at ? "checks itself" : "");
+    if (hint) label.append(Object.assign(document.createElement("span"), { className: "wait", textContent: hint }));
+    li.append(label);
+    list.append(li);
+  }
+  box.append(summary, list);
+  return box;
+}
+
 function draw() {
   const q = document.getElementById("filter").value.toLowerCase();
   const groups = { needs: [], working: [], open: [], parked: [], stale: [], done: [] };
   for (const it of items) {
-    const hay = [it.title, it.repo, it.note, it.git_branch, it.first_prompt].join(" ").toLowerCase();
+    const hay = [it.title, it.repo, it.note, it.git_branch, it.first_prompt, ...it.steps.map(s => s.title)].join(" ").toLowerCase();
     if (!q || hay.includes(q)) groups[bucket(it)].push(it);
   }
   groups.needs.sort((a, b) => (b.live === "waiting") - (a.live === "waiting") || a.last_activity_at - b.last_activity_at);

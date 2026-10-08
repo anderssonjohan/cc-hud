@@ -8,7 +8,7 @@ export HUD_DB
 ./hud.py ls >/dev/null
 
 fire() { printf '%s' "$1" | ./hooks/hud-event.sh; }
-row() { sqlite3 "$HUD_DB" "SELECT $1 FROM items WHERE session_id = 's1'"; }
+row() { sqlite3 "$HUD_DB" "SELECT $1 FROM items WHERE session_id = '${2:-s1}'"; }
 check() { # what, expected, actual
   if [ "$2" != "$3" ]; then
     echo "::error::$1: expected '$2', got '$3'"
@@ -32,7 +32,7 @@ fire '{"session_id":"s1","hook_event_name":"Notification","notification_type":"i
 check "an idle reminder is idle, not waiting" idle "$(row live)"
 
 fire '{"session_id":"s1","hook_event_name":"SessionEnd","reason":"clear"}'
-check "/clear closes the old session" "detached|done" "$(row "live || '|' || state")"
+check "/clear hands the old session on instead of closing it" "detached|cleared" "$(row "live || '|' || state")"
 
 fire '{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"back again"}'
 check "typing reopens it" "open|1" "$(row "state || '|' || (done_at IS NULL)")"
@@ -43,3 +43,25 @@ check "closing the tab only detaches" "detached|open" "$(row "live || '|' || sta
 fire '{}'
 fire '{"hook_event_name":"Stop"}'
 check "payloads without a session add nothing" 1 "$(sqlite3 "$HUD_DB" "SELECT count(*) FROM items")"
+
+fire '{"session_id":"s2","cwd":"/tmp/w","hook_event_name":"UserPromptSubmit","prompt":"ship https://github.com/acme/web/pull/9"}'
+./hud.py note "after the release, bump the app" -s s2
+./hud.py step add "Trigger the downstream release" -s s2 >/dev/null
+fire '{"session_id":"s2","cwd":"/tmp/w","hook_event_name":"SessionEnd","reason":"clear"}'
+fire '{"session_id":"s3","cwd":"/tmp/w","hook_event_name":"SessionStart","source":"clear"}'
+check "the session after /clear continues the thread" "s2" "$(row thread_id s3)"
+check "it carries the note and the PR" "after the release, bump the app|acme/web#9" "$(row "note || '|' || gh_ref" s3)"
+check "the thread's steps come along" "1. [ ] Trigger the downstream release" "$(./hud.py step ls -s s3 | head -1)"
+
+fire '{"session_id":"s3","cwd":"/tmp/w","hook_event_name":"SessionEnd","reason":"clear"}'
+fire '{"session_id":"s4","cwd":"/tmp/w","hook_event_name":"SessionStart","source":"clear"}'
+check "a second /clear stays in the first session's thread" "s2" "$(row thread_id s4)"
+
+fire '{"session_id":"s5","cwd":"/tmp/elsewhere","hook_event_name":"SessionStart","source":"clear"}'
+check "a /clear in another folder starts its own thread" "" "$(row thread_id s5)"
+
+fire '{"session_id":"s6","cwd":"/tmp/v","hook_event_name":"SessionStart","source":"startup"}'
+./hud.py "done" s6 >/dev/null
+fire '{"session_id":"s6","cwd":"/tmp/v","hook_event_name":"SessionEnd","reason":"clear"}'
+fire '{"session_id":"s7","cwd":"/tmp/v","hook_event_name":"SessionStart","source":"clear"}'
+check "/done before /clear stays done and starts nothing" "done|" "$(row state s6)|$(row thread_id s7)"
