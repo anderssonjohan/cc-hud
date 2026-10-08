@@ -14,7 +14,15 @@ if [ "${1:-}" = go ] && [[ "${2:-}" =~ ^[0-9a-f-]+$ ]]; then
 fi
 q() { sqlite3 -separator $'\x1f' -cmd '.timeout 2000' "$DB" "$1" 2>/dev/null; }
 
-NEEDS="state = 'open' AND (live IN ('waiting', 'idle') OR (live = 'detached' AND pr_alert IS NOT NULL))"
+THREAD="coalesce(items.thread_id, items.session_id)"
+PENDING="EXISTS (SELECT 1 FROM steps p WHERE p.thread_id = $THREAD AND p.done_at IS NULL)"
+# Same rule as STEP_READY in hud.py: the next step is yours and the wait before it has come through.
+READY="EXISTS (SELECT 1 FROM steps n JOIN steps w ON w.thread_id = n.thread_id AND w.pos = n.pos - 1
+  WHERE n.thread_id = $THREAD AND n.kind = 'manual' AND n.done_at IS NULL AND w.kind != 'manual' AND w.done_at IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM steps e WHERE e.thread_id = n.thread_id AND e.pos < n.pos AND e.done_at IS NULL))"
+# A merged or closed PR is expected, not news, while the thread still has steps after it.
+ALERT="pr_alert IS NOT NULL AND NOT (pr_alert IN ('merged', 'closed') AND $PENDING)"
+NEEDS="state = 'open' AND (live IN ('waiting', 'idle') OR (live = 'detached' AND (($ALERT) OR $READY)))"
 needs="$(q "SELECT count(*) FROM items WHERE $NEEDS")"
 waiting="$(q "SELECT count(*) FROM items WHERE state = 'open' AND live = 'waiting'")"
 open="$(q "SELECT count(*) FROM items WHERE state = 'open'")"
@@ -65,7 +73,7 @@ section() {
 
 section "Needs you" "$NEEDS"
 section "Working" "state = 'open' AND live = 'working'"
-section "Open, no tab" "state = 'open' AND live = 'detached' AND pr_alert IS NULL"
+section "Open, no tab" "state = 'open' AND live = 'detached' AND NOT ($NEEDS)"
 # The token signs the board in; it lives next to the DB and only this user can read it.
 token="$(cat "$(dirname "$DB")/token" 2>/dev/null)"
 echo "Open board | href=http://localhost:7777/${token:+#t=$token} sfimage=rectangle.split.3x1"

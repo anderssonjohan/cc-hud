@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 import urllib.request
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import hud
@@ -129,6 +130,7 @@ def avatar_path(login: str) -> Path | None:
 REPO_PART = re.compile(r"^[\w.-]+$")
 FAST, SLOW, FINAL = 60, 900, 86400
 PRS_PER_QUERY = 20
+STEPS_PER_QUERY = 10
 
 STATUS_FIELDS = """
   __typename
@@ -143,6 +145,9 @@ STATUS_FIELDS = """
     latestReviews(first: 10) { nodes { author { login } state submittedAt } }
   }
 """
+RELEASE_FIELDS = (
+    "releases(first: 10, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName publishedAt isDraft } }"
+)
 VERB = {
     "SUCCESS": "passed",
     "FAILURE": "failed",
@@ -233,8 +238,33 @@ def summarize(node: dict) -> dict:
     }
 
 
+def split_ref(ref: str) -> tuple[str, str, int | None] | None:
+    """owner, repo and number from owner/repo#123, or owner and repo alone from owner/repo; None if malformed."""
+    repo, _, number = ref.partition("#")
+    owner, _, name = repo.partition("/")
+    if not (REPO_PART.match(owner) and REPO_PART.match(name)) or (number and not number.isdigit()):
+        return None
+    return owner, name, int(number) if number else None
+
+
+def release_after(nodes: list, since: int, pattern: str) -> dict | None:
+    """The first published release since `since` whose tag matches the pattern."""
+    hits = [
+        n
+        for n in nodes
+        if n
+        and not n.get("isDraft")
+        and (epoch(n.get("publishedAt")) or 0) >= since
+        and fnmatchcase(n.get("tagName") or "", pattern)
+    ]
+    return min(hits, key=lambda n: n["publishedAt"]) if hits else None
+
+
 def refresh_status(db) -> None:
-    """Poll PR state for open sessions: every minute while recent, every 15 minutes otherwise, daily once final."""
+    """Poll PR state for open sessions: every minute while recent, every 15 minutes otherwise, daily once final.
+
+    Steps that wait on a PR or a release ride along in the same request.
+    """
     now = int(time.time())
     rows = db.execute(
         """SELECT session_id, coalesce(pr_ref, gh_ref) AS ref FROM items
@@ -246,18 +276,43 @@ def refresh_status(db) -> None:
            ORDER BY live != 'detached' DESC, last_activity_at DESC LIMIT ?""",
         (now, FINAL, now - 2 * 86400, FAST, SLOW, PRS_PER_QUERY),
     ).fetchall()
-    targets = {}
+    # A release only counts once the steps before it are done, and only if it came out after them: a release cut
+    # from someone else's merge while the PR is still open is not the one the next step is waiting for.
+    steps = db.execute(
+        f"""SELECT id, kind, cond, coalesce(
+                   (SELECT max(e.done_at) FROM steps e WHERE e.thread_id = steps.thread_id AND e.pos < steps.pos),
+                   created_at) AS since
+            FROM steps
+            WHERE done_at IS NULL AND kind IN ('pr_merged', 'release')
+              AND NOT (kind = 'release' AND EXISTS (SELECT 1 FROM steps e WHERE e.thread_id = steps.thread_id
+                                                    AND e.pos < steps.pos AND e.done_at IS NULL))
+              AND coalesce(checked_at, 0) < ? - CASE WHEN created_at > ? THEN ? ELSE ? END
+              AND EXISTS (SELECT 1 FROM items WHERE {hud.THREAD} = steps.thread_id AND state IN ('open', 'parked'))
+            ORDER BY created_at DESC LIMIT ?""",
+        (now, now - 2 * 86400, FAST, SLOW, STEPS_PER_QUERY),
+    ).fetchall()
+    prs: dict[tuple, dict] = {}
     for row in rows:
-        repo, _, number = row["ref"].partition("#")
-        owner, _, name = repo.partition("/")
-        if REPO_PART.match(owner) and REPO_PART.match(name) and number.isdigit():
-            targets.setdefault((owner, name, int(number)), []).append(row["session_id"])
-    if not targets:
+        if (ref := split_ref(row["ref"])) and ref[2] is not None:
+            prs.setdefault(ref, {"sessions": [], "steps": []})["sessions"].append(row["session_id"])
+    releases: dict[tuple, list] = {}
+    for step in steps:
+        ref = split_ref(step["cond"].partition("@")[0])
+        if step["kind"] == "pr_merged" and ref and ref[2] is not None:
+            prs.setdefault(ref, {"sessions": [], "steps": []})["steps"].append(step)
+        elif step["kind"] == "release" and ref and ref[2] is None:
+            releases.setdefault(ref[:2], []).append(step)
+        else:
+            db.execute(
+                "UPDATE steps SET checked_at = ?, detail = 'not a valid reference' WHERE id = ?", (now, step["id"])
+            )
+    if not prs and not releases:
+        db.commit()
         return
-    aliases = (
+    aliases = [
         f'p{i}: repository(owner: "{o}", name: "{n}") {{ issueOrPullRequest(number: {num}) {{ {STATUS_FIELDS} }} }}'
-        for i, (o, n, num) in enumerate(targets)
-    )
+        for i, (o, n, num) in enumerate(prs)
+    ] + [f'r{i}: repository(owner: "{o}", name: "{n}") {{ {RELEASE_FIELDS} }}' for i, (o, n) in enumerate(releases)]
     query = "query { " + " ".join(aliases) + " }"
     out = subprocess.run(
         ["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, check=False, timeout=30
@@ -266,10 +321,10 @@ def refresh_status(db) -> None:
         data = json.loads(out.stdout).get("data") or {}
     except ValueError:
         return
-    for i, sids in enumerate(targets.values()):
+    for i, target in enumerate(prs.values()):
         node = ((data.get(f"p{i}") or {}).get("issueOrPullRequest")) or {}
         status = summarize(node) if node else {}
-        for sid in sids:
+        for sid in target["sessions"]:
             if status:
                 db.execute(
                     "UPDATE items SET pr_state = ?, pr_rollup = ?, pr_event = ?, pr_event_at = ?, pr_alert = ?, "
@@ -286,4 +341,19 @@ def refresh_status(db) -> None:
                 )
             else:
                 db.execute("UPDATE items SET pr_checked_at = ? WHERE session_id = ?", (now, sid))
+        merged = epoch(node.get("mergedAt"))
+        closed = node.get("state") == "CLOSED" and not merged
+        for step in target["steps"]:
+            db.execute(
+                "UPDATE steps SET checked_at = ?, done_at = ?, detail = ? WHERE id = ?",
+                (now, merged, "closed without merging" if closed else None, step["id"]),
+            )
+    for i, waiting in enumerate(releases.values()):
+        nodes = (((data.get(f"r{i}") or {}).get("releases")) or {}).get("nodes") or []
+        for step in waiting:
+            hit = release_after(nodes, step["since"] or 0, step["cond"].partition("@")[2] or "*")
+            db.execute(
+                "UPDATE steps SET checked_at = ?, done_at = ?, detail = ? WHERE id = ?",
+                (now, epoch(hit["publishedAt"]) if hit else None, hit["tagName"] if hit else None, step["id"]),
+            )
     db.commit()

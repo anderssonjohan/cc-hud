@@ -22,13 +22,31 @@ def items() -> list[dict]:
     # leaves it to the cycle collector and a long-running server runs out of file descriptors first.
     with closing(hud.connect()) as db:
         rows = db.execute(
-            "SELECT * FROM items WHERE state != 'done' OR done_at > ? ORDER BY last_activity_at DESC",
+            f"SELECT *, {hud.STEP_READY} AS step_ready FROM items "
+            "WHERE state != 'cleared' AND (state != 'done' OR done_at > ?) ORDER BY last_activity_at DESC",
             (int(time.time()) - 7 * 86400,),
         ).fetchall()
+        # A side-car keeps pointing at the session it was linked to; after /clear that is the thread's newest one.
+        heads = {
+            r["session_id"]: r["head"]
+            for r in db.execute(
+                f"SELECT session_id, (SELECT h.session_id FROM items h WHERE coalesce(h.thread_id, h.session_id) = "
+                f"{hud.THREAD} AND h.state != 'cleared' ORDER BY h.last_activity_at DESC LIMIT 1) AS head "
+                "FROM items WHERE state = 'cleared'"
+            )
+            if r["head"]
+        }
+        steps: dict[str, list[dict]] = {}
+        for s in db.execute("SELECT id, thread_id, pos, title, kind, detail, done_at FROM steps ORDER BY pos"):
+            steps.setdefault(s["thread_id"], []).append(dict(s))
     out = []
     for r in rows:
         d = dict(r)
+        d["steps"] = steps.get(hud.thread_of(r), [])
+        d["step_ready"] = bool(r["step_ready"])
         d["title"] = hud.title(r)
+        if r["linked_to"] and r["linked_to"] in heads:
+            d["linked_to"] = heads[r["linked_to"]]
         d["repo"] = Path(r["cwd"] or "?").name
         d["resume_cmd"] = hud.resume_command(r) if r["cwd"] else None
         d["avatar"] = f"/avatars/{r['gh_login']}" if r["gh_login"] and github.avatar_path(r["gh_login"]) else None
@@ -97,9 +115,11 @@ class Handler(BaseHTTPRequestHandler):
         parts = self.path.strip("/").split("/")
         if len(parts) != 3 or parts[:1] != ["api"]:
             return self._send(404, {"error": "not found"})
-        _, action, sid = parts
+        _, action, key = parts
         with closing(hud.connect()) as db:
-            return self._post(db, action, sid)
+            if action == "steps":
+                return self._post_step(db, key)
+            return self._post(db, action, key)
 
     def _body(self) -> dict | None:
         try:
@@ -113,6 +133,16 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return None
         return body if isinstance(body, dict) else None
+
+    def _post_step(self, db, step_id: str):
+        body = self._body()
+        if body is None or not isinstance(body.get("done"), bool):
+            return self._send(400, {"error": 'expected {"done": true or false}'})
+        done_at = int(time.time()) if body["done"] else None
+        if not db.execute("UPDATE steps SET done_at = ? WHERE id = ?", (done_at, step_id)).rowcount:
+            return self._send(404, {"error": "unknown step"})
+        db.commit()
+        return self._send(200, {"ok": True})
 
     def _post(self, db, action: str, sid: str):
         row = db.execute("SELECT * FROM items WHERE session_id = ?", (sid,)).fetchone()
