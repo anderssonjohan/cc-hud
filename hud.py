@@ -656,9 +656,11 @@ def cmd_digest(args) -> None:
         sys.exit(f"set HUD_SLACK_WEBHOOK or store the webhook in Keychain as {service!r}")
     import urllib.request
 
-    req = urllib.request.Request(
-        webhook, data=json.dumps({"text": text}).encode(), headers={"Content-Type": "application/json"}
-    )
+    body = {"text": text}
+    # Without a channel the post lands in the channel the webhook was created for, which may be shared.
+    if channel := os.environ.get("HUD_SLACK_CHANNEL"):
+        body["channel"] = channel
+    req = urllib.request.Request(webhook, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req, timeout=10)
 
 

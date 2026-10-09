@@ -99,11 +99,12 @@ agent() { # name, hud.py argument, extra plist keys as JSON
   unload "$label"
   # Built as JSON and converted, so any character in a path ends up correctly escaped in the plist.
   jq -n --arg label "$label" --arg hud "$HUD" --arg arg "$2" --arg path "$path" --arg db "${HUD_DB:-}" \
-    --arg log "$HUD_HOME/$1.log" --argjson extra "$3" '
+    --arg channel "${HUD_SLACK_CHANNEL:-}" --arg log "$HUD_HOME/$1.log" --argjson extra "$3" '
     {
       Label: $label,
       ProgramArguments: [$hud, $arg],
-      EnvironmentVariables: ({PATH: $path} + (if $db == "" then {} else {HUD_DB: $db} end)),
+      EnvironmentVariables: ({PATH: $path} + (if $db == "" then {} else {HUD_DB: $db} end)
+        + (if $channel == "" then {} else {HUD_SLACK_CHANNEL: $channel} end)),
       StandardOutPath: $log,
       StandardErrorPath: $log
     } + $extra' | plutil -convert xml1 -o "$dest" -
