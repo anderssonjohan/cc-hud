@@ -132,6 +132,7 @@ An id can be a session id prefix, a background session id or a session name.
 |---|---|---|
 | `HUD_DB` | `~/.claude/hud/hud.db` | Where the ledger lives. Set it when you run `install.sh`, so the hooks and launchd agents get it too |
 | `HUD_SLACK_WEBHOOK` | | Webhook URL for a manual `hud.py digest`. The scheduled digest always reads the Keychain, so the URL never lands in a plist |
+| `HUD_SLACK_CHANNEL` | | Channel or member ID the digest posts to, overriding the webhook's own channel. Set it when you run `install.sh` so the scheduled digest gets it |
 | `HUD_SLACK_KEYCHAIN_SERVICE` | `claude-slack-webhook` | Keychain item holding the webhook |
 | `HUD_BACKFILL_DAYS` | `30` | History imported on first install |
 | `HUD_LABEL_PREFIX` | `io.github.anderssonjohan.cc-hud` | launchd label prefix |
